@@ -1,29 +1,59 @@
 # Journal
 
-A private daily journal for Omarchy: Rust + GTK4, encrypted at rest, exportable to markdown.
+A private daily journal for Omarchy: just a cursor and text. Rust + GTK4,
+encrypted on disk, exportable to markdown.
 
-## Build and install
+## Install
 
-Needs Rust, `gtk4` and GStreamer (`sudo pacman -S --needed rust gtk4 gst-plugins-good`).
+Download the latest release, unpack it and run the installer. It puts the app
+in `~/.local/bin`, adds the launcher entry and icon, and installs the fallback
+font. Nothing needs compiling.
 
 ```bash
-cargo build --release
-install -Dm755 target/release/journal ~/.local/bin/journal
-install -Dm644 -t ~/.local/share/fonts/gelasio assets/fonts/*.ttf && fc-cache -f
+gh release download -R omarsimon-1/journal -p '*.tar.gz' -O - | tar -xz && journal-linux-x86_64/install.sh
 ```
 
-The app uses Georgia when it is installed and falls back to the bundled Gelasio.
+Needs `gtk4` and GStreamer, which Omarchy already has.
+
+### Bar button (Omarchy plugin)
+
+This repo is also an Omarchy shell plugin that adds a bar button to open Journal:
+
+```bash
+omarchy plugin add https://github.com/omarsimon-1/journal.git --enable
+```
+
+The plugin is only the button; the app comes from the installer above.
+
+### Keybinding
+
+```lua
+o.bind("SUPER + SHIFT + J", "Journal", "omarchy-launch-or-focus app.journal.Journal 'uwsm-app -- journal'")
+```
 
 ## Use
 
-Run `journal`. The first launch sets the password; it cannot be recovered.
-Press Ctrl+/ in the app for the shortcut list. `journal help` lists the
-command-line and agent (MCP) commands, which work while the app is unlocked.
+Open Journal from the launcher. The first launch sets the password; it cannot
+be recovered. Press Ctrl+/ in the app for every shortcut.
+
+- Entries are timestamped at their first words. Ctrl+Enter starts the next one.
+- Ctrl+M opens the calendar: days written, streaks, words and characters.
+- Ctrl+Shift+P shows only the last few words, for writing in public.
+- Ctrl+Shift+H keeps an entry private from agents.
+
+## Agents, sync and backup
+
+Run `journal help` for the full list.
+
+- `journal search`, `journal read`, `journal mcp`: read-only access for agents while the app is unlocked. Private entries are never included.
+- `journal summarize`: a weekly or monthly summary written by a local Ollama model.
+- `journal sync <host>`: two-way sync with another machine over SSH or a tailnet. Only encrypted files travel. The host is remembered and synced on every unlock and lock.
+- `journal backup <folder>`: copies the encrypted vault; remembered and repeated on every lock.
 
 The vault lives in `~/.local/share/journal` (override with `JOURNAL_DIR`).
 
-## Test
+## Build from source
 
 ```bash
-cargo test
+cargo build --release && ./install.sh
 ```

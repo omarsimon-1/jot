@@ -36,6 +36,9 @@ pub struct Entry {
     pub text: String,
     #[serde(default)]
     pub media: Vec<Media>,
+    /// Private entries never leave the app through agent access.
+    #[serde(default)]
+    pub private: bool,
 }
 
 impl Entry {
@@ -55,6 +58,9 @@ struct Meta {
     t_cost: u32,
     p_cost: u32,
     wrapped_key: String,
+    /// Identifies this journal so sync never mixes two separately created ones.
+    #[serde(default)]
+    id: String,
 }
 
 #[derive(Clone)]
@@ -235,13 +241,14 @@ impl Vault {
             t_cost: t,
             p_cost: p,
             wrapped_key: hex(&seal(&pw_key, master.as_ref())?),
+            id: hex(&random::<8>()),
         };
         write_atomic(&dir.join("vault.json"), serde_json::to_string_pretty(&meta)?.as_bytes())?;
         Ok(Vault { dir: dir.to_path_buf(), key: Arc::new(master) })
     }
 
     pub fn open(dir: &Path, password: &str) -> Result<Vault> {
-        let meta: Meta = serde_json::from_slice(&fs::read(dir.join("vault.json"))?)?;
+        let mut meta: Meta = serde_json::from_slice(&fs::read(dir.join("vault.json"))?)?;
         let pw_key = derive(password, &unhex(&meta.salt)?, meta.m_cost, meta.t_cost, meta.p_cost)?;
         let raw = Zeroizing::new(unseal(&pw_key, &unhex(&meta.wrapped_key)?).map_err(|_| anyhow!("Wrong password"))?);
         let mut master = Zeroizing::new([0u8; 32]);
@@ -249,7 +256,22 @@ impl Vault {
             bail!("corrupt vault");
         }
         master.copy_from_slice(&raw);
+        if meta.id.is_empty() {
+            meta.id = hex(&random::<8>());
+            write_atomic(&dir.join("vault.json"), serde_json::to_string_pretty(&meta)?.as_bytes())?;
+        }
         Ok(Vault { dir: dir.to_path_buf(), key: Arc::new(master) })
+    }
+
+    /// Re-wraps the same master key under a new password; entries are untouched.
+    pub fn change_password(&self, new_password: &str) -> Result<()> {
+        let path = self.dir.join("vault.json");
+        let mut meta: Meta = serde_json::from_slice(&fs::read(&path)?)?;
+        let salt: [u8; 16] = random();
+        let pw_key = derive(new_password, &salt, meta.m_cost, meta.t_cost, meta.p_cost)?;
+        meta.salt = hex(&salt);
+        meta.wrapped_key = hex(&seal(&pw_key, self.key.as_ref().as_ref())?);
+        write_atomic(&path, serde_json::to_string_pretty(&meta)?.as_bytes())
     }
 
     pub fn load_entries(&self) -> Result<Vec<Entry>> {
@@ -334,6 +356,101 @@ impl Vault {
     }
 }
 
+fn vault_id(meta_json: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Meta>(meta_json).ok().map(|m| m.id)
+}
+
+fn vault_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = vec![PathBuf::from("vault.json")];
+    for sub in ["entries", "media"] {
+        for f in fs::read_dir(dir.join(sub)).into_iter().flatten().flatten() {
+            let name = f.file_name();
+            if Path::new(&name).extension().is_some_and(|e| e == "enc") {
+                out.push(Path::new(sub).join(name));
+            }
+        }
+    }
+    out
+}
+
+/// Copies the (already encrypted) vault files that are new or changed. Returns how many.
+pub fn backup(dir: &Path, dest: &Path) -> Result<usize> {
+    if !Vault::exists(dir) {
+        bail!("there is no journal to back up yet");
+    }
+    private_dir(&dest.join("entries"))?;
+    private_dir(&dest.join("media"))?;
+    let mut copied = 0;
+    for rel in vault_files(dir) {
+        let (src, dst) = (dir.join(&rel), dest.join(&rel));
+        let sm = fs::metadata(&src)?;
+        let fresh = fs::metadata(&dst)
+            .map(|dm| dm.len() == sm.len() && dm.modified().ok() >= sm.modified().ok())
+            .unwrap_or(false);
+        if !fresh {
+            let tmp = dst.with_extension("tmp");
+            fs::copy(&src, &tmp)?;
+            fs::rename(&tmp, &dst)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
+fn run(cmd: &mut std::process::Command, what: &str) -> Result<Vec<u8>> {
+    let out = cmd.output().with_context(|| format!("could not run {what}"))?;
+    if !out.status.success() {
+        bail!("{what} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(out.stdout)
+}
+
+/// Two-way sync of the encrypted files with another machine over SSH (for
+/// example a tailnet host). Only ciphertext travels; nothing is ever deleted.
+pub fn sync_with(dir: &Path, host: &str) -> Result<String> {
+    if host.is_empty() || host.starts_with('-') || host.chars().any(|c| c.is_whitespace() || c == '\'' || c == '"') {
+        bail!("that does not look like a host name");
+    }
+    const REMOTE: &str = ".local/share/journal";
+    const SSH: &str = "ssh -o BatchMode=yes -o ConnectTimeout=6";
+    let ssh = |script: &str| {
+        let mut c = std::process::Command::new("ssh");
+        c.args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=6", host, script]);
+        c
+    };
+    let remote_meta = run(&mut ssh(&format!("cat {REMOTE}/vault.json 2>/dev/null || true")), "ssh")?;
+    let remote_id = vault_id(&remote_meta);
+    let local_id = fs::read(dir.join("vault.json")).ok().and_then(|b| vault_id(&b));
+    match (&local_id, &remote_id) {
+        (None, None) => bail!("there is no journal on either machine yet"),
+        (Some(l), Some(r)) if l.is_empty() || r.is_empty() => {
+            bail!("open Journal once on both machines after updating, then sync again")
+        }
+        (Some(l), Some(r)) if l != r => {
+            bail!("{host} holds a different journal that was created separately; not mixing them")
+        }
+        _ => {}
+    }
+    let rsync = |from: &str, to: &str| {
+        let mut c = std::process::Command::new("rsync");
+        c.args(["-a", "--update", "--exclude", "*.tmp", "--chmod=D700,F600", "-e", SSH, from, to]);
+        run(&mut c, "rsync").map(|_| ())
+    };
+    let local = format!("{}/", dir.display());
+    let remote = format!("{host}:{REMOTE}/");
+    let before = vault_files(dir).len();
+    if remote_id.is_some() {
+        private_dir(dir)?;
+        rsync(&remote, &local)?;
+    }
+    let pulled = vault_files(dir).len().saturating_sub(if local_id.is_some() { before } else { 0 });
+    if local_id.is_some() {
+        run(&mut ssh(&format!("mkdir -p -m 700 {REMOTE}")), "ssh")?;
+        rsync(&local, &remote)?;
+    }
+    Ok(format!("Synced with {host}, {pulled} new file(s) received"))
+}
+
 pub fn group_by_day(entries: &[Entry]) -> BTreeMap<NaiveDate, Vec<&Entry>> {
     let mut days: BTreeMap<NaiveDate, Vec<&Entry>> = BTreeMap::new();
     for e in entries {
@@ -373,7 +490,7 @@ mod tests {
     fn roundtrip_and_wrong_password() {
         let d = tmp("vault");
         let v = Vault::create(&d, "hunter2").unwrap();
-        let e = Entry { id: "a".into(), created: Local::now(), text: "hello **world**".into(), media: vec![] };
+        let e = Entry { id: "a".into(), created: Local::now(), text: "hello **world**".into(), media: vec![], private: false };
         v.save_entry(&e).unwrap();
         assert!(Vault::open(&d, "nope").is_err());
         let v2 = Vault::open(&d, "hunter2").unwrap();
@@ -382,6 +499,23 @@ mod tests {
         assert_eq!(got[0].text, e.text);
         let raw = fs::read(d.join("entries/a.enc")).unwrap();
         assert!(!raw.windows(5).any(|w| w == b"hello"));
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn password_change_and_backup() {
+        let d = tmp("pwchange");
+        let v = Vault::create(&d, "old").unwrap();
+        let e = Entry { id: "a".into(), created: Local::now(), text: "kept".into(), media: vec![], private: false };
+        v.save_entry(&e).unwrap();
+        v.change_password("new").unwrap();
+        assert!(Vault::open(&d, "old").is_err());
+        assert_eq!(Vault::open(&d, "new").unwrap().load_entries().unwrap()[0].text, "kept");
+
+        let b = d.join("backup");
+        assert_eq!(backup(&d, &b).unwrap(), 2);
+        assert_eq!(backup(&d, &b).unwrap(), 0);
+        assert_eq!(Vault::open(&b, "new").unwrap().load_entries().unwrap().len(), 1);
         fs::remove_dir_all(&d).unwrap();
     }
 
@@ -398,7 +532,7 @@ mod tests {
             assert_eq!(v.read_media(&m.file).unwrap(), data, "size {size}");
         }
         let m = v.import_png(b"not really a png").unwrap();
-        let e = Entry { id: "b".into(), created: Local::now(), text: "note".into(), media: vec![m.clone()] };
+        let e = Entry { id: "b".into(), created: Local::now(), text: "note".into(), media: vec![m.clone()], private: false };
         let out = d.join("out");
         assert_eq!(v.export(&[e], &out).unwrap(), 1);
         assert_eq!(fs::read(out.join("media").join(&m.file)).unwrap(), b"not really a png");
@@ -427,10 +561,12 @@ mod tests {
             created: now - chrono::Duration::minutes(ago_min),
             text: text.into(),
             media,
+            private: false,
         };
         let entries = [
             mk("a", 60 * 26, "Yesterday's note about the **harbour** walk.", vec![]),
             mk("b", 95, "# Morning\nCoffee on the porch. The light was *unreasonably* good, and I finally fixed the ~~gate~~ fence.\n> Write it down before it goes.\n- call Sam\n- book the `ferry`", vec![photo]),
+            mk("d", 525_600, "A year ago today: first frost, and the long drive north.", vec![]),
             mk("c", 20, "Second entry of the day, with a clip.", vec![clip]),
         ];
         for e in &entries {

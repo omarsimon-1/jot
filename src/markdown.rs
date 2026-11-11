@@ -40,6 +40,7 @@ pub fn setup_tags(buffer: &gtk::TextBuffer) {
     buffer.create_tag(Some("code"), &[("family", &"monospace"), ("scale", &0.88f64)]);
     buffer.create_tag(Some("h1"), &[("scale", &1.3f64), ("weight", &700i32)]);
     buffer.create_tag(Some("h2"), &[("scale", &1.12f64), ("weight", &700i32)]);
+    buffer.create_tag(Some("veil"), &[("invisible", &true)]);
     buffer.create_tag(Some("hr"), &[("justification", &gtk::Justification::Center)]);
     buffer.create_tag(Some("quote"), &[("left-margin", &18i32), ("style", &pango::Style::Italic)]);
 }
@@ -114,7 +115,7 @@ pub fn to_markdown(buffer: &gtk::TextBuffer) -> String {
             }
         }
         let mut cur = start;
-        if buffer.text(&start, &end, false).starts_with(BULLET) {
+        if buffer.text(&start, &end, true).starts_with(BULLET) {
             line.push_str("- ");
             cur.forward_chars(2);
         }
@@ -125,7 +126,7 @@ pub fn to_markdown(buffer: &gtk::TextBuffer) -> String {
                 next = end;
             }
             let set: Vec<&'static str> = names_at(&cur).into_iter().filter(|t| INLINE.contains(t)).collect();
-            emit_run(&mut line, &mut stack, &set, buffer.text(&cur, &next, false).as_str());
+            emit_run(&mut line, &mut stack, &set, buffer.text(&cur, &next, true).as_str());
             cur = next;
         }
         close_from(&mut line, &mut stack, 0);
@@ -278,7 +279,7 @@ impl Fmt {
             }
             _ => *pending = None,
         }
-        if self.buffer.text(&s, &e, false).contains('\n') {
+        if self.buffer.text(&s, &e, true).contains('\n') {
             *pending = None;
         }
         drop(pending);
@@ -365,6 +366,30 @@ impl Fmt {
         }
     }
 
+    /// Hides everything except the last `words` words (or shows it all again).
+    pub fn veil(&self, words: Option<usize>) {
+        let (start, end) = self.buffer.bounds();
+        self.buffer.remove_tag_by_name("veil", &start, &end);
+        let Some(words) = words else { return };
+        let chars: Vec<char> = self.buffer.text(&start, &end, true).chars().collect();
+        let mut i = chars.len();
+        let mut seen = 0;
+        while i > 0 {
+            while i > 0 && chars[i - 1].is_whitespace() {
+                i -= 1;
+            }
+            if i == 0 || seen == words {
+                break;
+            }
+            while i > 0 && !chars[i - 1].is_whitespace() {
+                i -= 1;
+            }
+            seen += 1;
+        }
+        let cut = self.buffer.iter_at_offset(i as i32);
+        self.buffer.apply_tag_by_name("veil", &start, &cut);
+    }
+
     /// Puts a short centred rule on its own line and leaves the cursor below it.
     pub fn insert_divider(&self) {
         let mut cur = self.cursor();
@@ -382,7 +407,7 @@ impl Fmt {
         let (first, last) = self.selected_lines();
         for line in first..=last {
             let Some((mut s, e)) = self.line_bounds(line) else { continue };
-            if self.buffer.text(&s, &e, false).starts_with(BULLET) {
+            if self.buffer.text(&s, &e, true).starts_with(BULLET) {
                 let mut after = s;
                 after.forward_chars(2);
                 self.buffer.delete(&mut s, &mut after);
@@ -399,7 +424,7 @@ impl Fmt {
         }
         let cur = self.cursor();
         let Some((mut s, mut e)) = self.line_bounds(cur.line()) else { return false };
-        let text = self.buffer.text(&s, &e, false);
+        let text = self.buffer.text(&s, &e, true);
         if !text.starts_with(BULLET) {
             return false;
         }

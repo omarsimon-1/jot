@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "omarsimon.journal",
+  "name": "Journal",
+  "version": "0.3.0",
+  "author": "omarsimon-1",
+  "homepage": "https://github.com/omarsimon-1/journal",
+  "description": "A private daily journal: just a cursor and text. Encrypted on disk, exportable to markdown, with photos, videos, search and a calendar of the days you wrote. This plugin is the bar button; install the app itself with install.sh from the latest release.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": { "barWidget": "plugin/BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Journal",
+    "description": "Opens Journal, or brings it to the front if it is already open.",
+    "category": "Productivity",
+    "aliases": ["journal", "diary", "writing", "notes"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

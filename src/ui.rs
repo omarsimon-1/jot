@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,8 @@ Ctrl 1 / 2 / 0\theading / subheading / body
 Ctrl Shift Q\tquote
 Ctrl Shift L\tbullet list
 Ctrl Shift D\tdivider
+Ctrl Shift H\tkeep this entry private from agents
+Ctrl Shift P\tshow only the last few words (Ctrl 1–5 sets how many)
 Ctrl O\tattach photos or videos (or paste, or drop)
 Ctrl Shift ⌫\tremove the last attachment
 Alt ← / →\tprevious / next day
@@ -34,6 +36,7 @@ Ctrl Shift E\texport to markdown
 Ctrl + / −\ttext size
 Ctrl D\tlight / dark
 Ctrl L\tlock
+Ctrl Shift K\tchange password
 Ctrl /\tthis list";
 
 struct Draft {
@@ -45,7 +48,16 @@ struct Draft {
     time: gtk::Label,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum PwMode {
+    Unlock,
+    ChangeOld,
+    ChangeNew,
+}
+
 struct State {
+    veil: Option<usize>,
+    pw_mode: PwMode,
     day: NaiveDate,
     draft: Option<Draft>,
     dark: bool,
@@ -78,6 +90,7 @@ pub struct Ui {
     cal_stats: gtk::Label,
     css: gtk::CssProvider,
     shared: SharedRef,
+    notes: Sender<String>,
     dir: PathBuf,
     st: RefCell<State>,
 }
@@ -94,6 +107,16 @@ fn label(text: &str, class: &str) -> gtk::Label {
     let l = gtk::Label::builder().label(text).xalign(0.0).wrap(true).build();
     l.add_css_class(class);
     l
+}
+
+/// The small line above an entry: its time, and whether it is private.
+fn stamp(e: &Entry) -> String {
+    match (e.id.is_empty(), e.private) {
+        (true, false) => String::new(),
+        (true, true) => "private".to_string(),
+        (false, false) => e.time_label(),
+        (false, true) => format!("{} · private", e.time_label()),
+    }
 }
 
 fn rule() -> gtk::Separator {
@@ -196,6 +219,7 @@ button.video {{ background: transparent; color: {muted}; border: 1px solid {rule
   box-shadow: none; padding: 5px 10px; font-size: {s1}px; }}
 button.video:hover, button.video:focus {{ color: {fg}; border-color: {accent}; }}
 .media {{ margin-top: 10px; }}
+.earlier {{ color: {muted}; font-size: {s2}px; margin-bottom: 14px; }}
 .burger {{ opacity: 0; color: {muted}; font-size: {px}px; margin-top: 36px; margin-bottom: 20px; padding: 0 10px; }}
 .date-row:hover .burger {{ opacity: 1; }}
 .cal-title {{ color: {muted}; font-size: {s2}px; margin-bottom: 8px; }}
@@ -219,10 +243,10 @@ pub fn run() {
         }
         let shared: SharedRef = Arc::new(Mutex::new(Shared::default()));
         let (tx, rx) = channel();
-        if let Err(e) = ipc::serve(shared.clone(), tx) {
+        if let Err(e) = ipc::serve(shared.clone(), tx.clone()) {
             eprintln!("agent access unavailable: {e}");
         }
-        Ui::build(app, shared, rx);
+        Ui::build(app, shared, rx, tx);
     });
     app.connect_shutdown(|_| {
         let _ = std::fs::remove_dir_all(tmp_dir());
@@ -232,7 +256,7 @@ pub fn run() {
 }
 
 impl Ui {
-    fn build(app: &gtk::Application, shared: SharedRef, rx: Receiver<String>) {
+    fn build(app: &gtk::Application, shared: SharedRef, rx: Receiver<String>, notes: Sender<String>) {
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .title("Journal")
@@ -377,6 +401,7 @@ impl Ui {
             cal_stats,
             css,
             shared,
+            notes,
             dir: vault::default_dir(),
             st: RefCell::new(State {
                 day: today(),
@@ -386,6 +411,8 @@ impl Ui {
                 save_timer: None,
                 status_timer: None,
                 hits: Vec::new(),
+                veil: None,
+                pw_mode: PwMode::Unlock,
                 font: load_font(),
                 cal_month: today().with_day(1).unwrap_or_else(today),
                 cal_sel: today(),
@@ -447,6 +474,17 @@ impl Ui {
                     u.on_key(Key::D, cs);
                     b.insert_at_cursor("below the divider");
                     eprintln!("markdown: {:?}", markdown::to_markdown(&b));
+                    u.on_key(Key::H, cs);
+                    if std::env::var("JOURNAL_DEBUG_VEIL").is_ok() {
+                        u.on_key(Key::P, cs);
+                        u.on_key(Key::_4, ctrl);
+                    }
+                    if std::env::var("JOURNAL_DEBUG_TOP").is_ok() {
+                        let u2 = u.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                            u2.scroller.vadjustment().set_value(0.0)
+                        });
+                    }
                     if std::env::var("JOURNAL_DEBUG_BIG").is_ok() {
                         u.on_key(Key::equal, ctrl);
                         u.on_key(Key::equal, ctrl);
@@ -518,8 +556,65 @@ impl Ui {
         self.pw2.set_text("");
         self.pw2.set_visible(creating);
         self.lock_msg.set_text(if creating { "new password, twice · it cannot be recovered" } else { "" });
+        self.st.borrow_mut().pw_mode = PwMode::Unlock;
         self.stack.set_visible_child_name("lock");
         self.pw.grab_focus();
+    }
+
+    fn start_password_change(self: &Rc<Self>) {
+        self.save_draft();
+        self.close_overlays();
+        self.st.borrow_mut().pw_mode = PwMode::ChangeOld;
+        self.pw.set_text("");
+        self.pw2.set_text("");
+        self.pw2.set_visible(false);
+        self.lock_msg.set_text("current password");
+        self.stack.set_visible_child_name("lock");
+        self.pw.grab_focus();
+    }
+
+    fn end_password_change(self: &Rc<Self>, note: &str) {
+        self.st.borrow_mut().pw_mode = PwMode::Unlock;
+        self.pw.set_text("");
+        self.pw2.set_text("");
+        self.pw2.set_visible(false);
+        self.lock_msg.set_text("");
+        self.stack.set_visible_child_name("journal");
+        if let Some(d) = self.st.borrow().draft.as_ref() {
+            d.view.grab_focus();
+        }
+        if !note.is_empty() {
+            self.set_status(note);
+        }
+    }
+
+    fn change_password_step(self: &Rc<Self>, mode: PwMode) {
+        let password = self.pw.text();
+        if mode == PwMode::ChangeOld {
+            match Vault::open(&self.dir, &password) {
+                Ok(_) => {
+                    self.st.borrow_mut().pw_mode = PwMode::ChangeNew;
+                    self.pw.set_text("");
+                    self.pw2.set_visible(true);
+                    self.lock_msg.set_text("new password, twice · it cannot be recovered");
+                }
+                Err(_) => {
+                    self.pw.set_text("");
+                    self.lock_msg.set_text("Wrong password");
+                }
+            }
+            self.pw.grab_focus();
+            return;
+        }
+        if password != self.pw2.text() {
+            self.lock_msg.set_text("Those don't match.");
+            self.pw2.set_text("");
+            return;
+        }
+        match self.vault().map(|v| v.change_password(&password)) {
+            Some(Ok(())) => self.end_password_change("Password changed"),
+            _ => self.end_password_change("Could not change the password"),
+        }
     }
 
     fn connect_lock_screen(self: &Rc<Self>) {
@@ -538,6 +633,11 @@ impl Ui {
     fn unlock(self: &Rc<Self>) {
         let password = self.pw.text();
         if password.is_empty() {
+            return;
+        }
+        let mode = self.st.borrow().pw_mode;
+        if mode != PwMode::Unlock {
+            self.change_password_step(mode);
             return;
         }
         let result = if self.pw2.is_visible() {
@@ -567,6 +667,7 @@ impl Ui {
                 drop(st);
                 self.stack.set_visible_child_name("journal");
                 self.render();
+                self.sync_in_background();
             }
             Err(e) => {
                 self.lock_msg.set_text(&e.to_string());
@@ -592,7 +693,14 @@ impl Ui {
         show(&self.help, false);
         show(&self.menu, false);
         let _ = std::fs::remove_dir_all(tmp_dir());
+        self.st.borrow_mut().veil = None;
         self.show_lock();
+        // Backup and sync run in their own process so they finish even if the app is closing.
+        if crate::config::get("backup-dir").is_some() || crate::config::get("sync-host").is_some() {
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = std::process::Command::new(exe).arg("_after-lock").spawn();
+            }
+        }
     }
 
     // ---- page ----------------------------------------------------------
@@ -630,11 +738,35 @@ impl Ui {
         click.connect_released(move |_, _, _, _| u.toggle_menu());
         date_row.add_controller(click);
         self.page.append(&date_row);
+        let earlier: Vec<(NaiveDate, String)> = {
+            let s = self.shared.lock().unwrap();
+            let mut seen: Vec<(NaiveDate, String)> = Vec::new();
+            for e in s.entries.iter().filter(|e| {
+                let d = e.date();
+                d.month() == day.month() && d.day() == day.day() && d.year() < day.year()
+            }) {
+                if seen.last().map(|l| l.0) != Some(e.date()) {
+                    let text = ipc::plain(&e.text).split_whitespace().collect::<Vec<_>>().join(" ");
+                    seen.push((e.date(), text.chars().take(70).collect()));
+                }
+            }
+            seen
+        };
+        for (date, text) in earlier.into_iter().rev() {
+            let line = label(&format!("{} · {}", date.year(), text), "earlier");
+            line.set_wrap(false);
+            line.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            let click = gtk::GestureClick::new();
+            let u = self.clone();
+            click.connect_released(move |_, _, _, _| u.go_to(date));
+            line.add_controller(click);
+            self.page.append(&line);
+        }
         for (i, e) in entries.iter().enumerate() {
             if i > 0 {
                 self.page.append(&rule());
             }
-            self.page.append(&label(&e.time_label(), "time"));
+            self.page.append(&label(&stamp(e), "time"));
             let view = make_view(false);
             markdown::load_markdown(&view.buffer(), &e.text);
             if !e.text.trim().is_empty() {
@@ -659,16 +791,16 @@ impl Ui {
         if day != today() {
             self.scroller.vadjustment().set_value(0.0);
         }
+        self.apply_veil();
     }
 
     fn build_editor(self: &Rc<Self>, vault: &Vault) {
         let entry = match self.st.borrow_mut().draft.take() {
             Some(d) => (d.entry, d.saved),
-            None => (Entry { id: String::new(), created: Local::now(), text: String::new(), media: Vec::new() }, false),
+            None => (Entry { id: String::new(), created: Local::now(), text: String::new(), media: Vec::new(), private: false }, false),
         };
         let (entry, saved) = entry;
-        let time_text = if entry.id.is_empty() { String::new() } else { entry.time_label() };
-        let time = label(&time_text, "time");
+        let time = label(&stamp(&entry), "time");
         let view = make_view(true);
         let buffer = view.buffer();
         markdown::load_markdown(&buffer, &entry.text);
@@ -698,6 +830,9 @@ impl Ui {
         });
         if let Some(old) = self.st.borrow_mut().save_timer.replace(id) {
             old.remove();
+        }
+        if self.st.borrow().veil.is_some() {
+            self.apply_veil();
         }
         let u = self.clone();
         glib::idle_add_local_once(move || u.follow_cursor(false));
@@ -737,14 +872,14 @@ impl Ui {
                 d.saved = false;
             }
             d.entry.id.clear();
-            d.time.set_text("");
+            d.time.set_text(&stamp(&d.entry));
             return;
         }
         if d.entry.id.is_empty() {
             d.entry.created = Local::now();
             d.entry.id = d.entry.created.format("%Y%m%dT%H%M%S%3f").to_string();
-            d.time.set_text(&d.entry.time_label());
         }
+        d.time.set_text(&stamp(&d.entry));
         let entry = d.entry.clone();
         match vault.save_entry(&entry) {
             Ok(()) => {
@@ -1117,6 +1252,13 @@ impl Ui {
         if self.vault().is_none() {
             return false;
         }
+        if self.st.borrow().pw_mode != PwMode::Unlock {
+            if key == Key::Escape {
+                self.end_password_change("");
+                return true;
+            }
+            return false;
+        }
         let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
         let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
         let alt = mods.contains(gdk::ModifierType::ALT_MASK);
@@ -1174,7 +1316,25 @@ impl Ui {
             }
             return false;
         }
+        if self.st.borrow().veil.is_some() {
+            let words = match key {
+                Key::_1 => Some(1),
+                Key::_2 => Some(2),
+                Key::_3 => Some(3),
+                Key::_4 => Some(4),
+                Key::_5 => Some(5),
+                _ => None,
+            };
+            if words.is_some() {
+                self.st.borrow_mut().veil = words;
+                self.apply_veil();
+                return true;
+            }
+        }
         match (k, shift) {
+            (Key::p, true) => self.toggle_veil(),
+            (Key::h, true) => self.toggle_private(),
+            (Key::k, true) => self.start_password_change(),
             (Key::Return, _) | (Key::KP_Enter, _) => self.new_entry(),
             (Key::b, false) => self.with_fmt(|f| f.toggle_inline("bold")),
             (Key::i, false) => self.with_fmt(|f| f.toggle_inline("italic")),
@@ -1220,7 +1380,11 @@ impl Ui {
         let u = self.clone();
         glib::timeout_add_local(Duration::from_millis(400), move || {
             while let Ok(note) = rx.try_recv() {
-                u.set_status(&note);
+                if note == "!reload" {
+                    u.reload_entries();
+                } else {
+                    u.set_status(&note);
+                }
             }
             glib::ControlFlow::Continue
         });
@@ -1405,5 +1569,76 @@ impl Ui {
             streak,
             longest
         ));
+    }
+}
+
+// ---- privacy, private entries, sync -------------------------------------
+
+impl Ui {
+    fn toggle_veil(self: &Rc<Self>) {
+        let on = {
+            let mut st = self.st.borrow_mut();
+            st.veil = if st.veil.is_some() { None } else { Some(3) };
+            st.veil.is_some()
+        };
+        if on && self.st.borrow().day != today() {
+            self.go_to(today());
+        } else {
+            self.apply_veil();
+        }
+    }
+
+    /// While veiled, only the last few words being written are on screen.
+    fn apply_veil(&self) {
+        let st = self.st.borrow();
+        let Some(d) = st.draft.as_ref() else { return };
+        let mut child = self.page.first_child();
+        while let Some(c) = child {
+            c.set_visible(st.veil.is_none() || c == d.view);
+            child = c.next_sibling();
+        }
+        d.view.set_margin_top(if st.veil.is_some() { 160 } else { 0 });
+        d.fmt.veil(st.veil);
+    }
+
+    fn toggle_private(self: &Rc<Self>) {
+        {
+            let mut st = self.st.borrow_mut();
+            let Some(d) = st.draft.as_mut() else { return };
+            d.entry.private = !d.entry.private;
+            d.time.set_text(&stamp(&d.entry));
+        }
+        self.save_draft();
+    }
+
+    fn sync_in_background(&self) {
+        let Some(host) = crate::config::get("sync-host") else { return };
+        let (dir, notes) = (self.dir.clone(), self.notes.clone());
+        std::thread::spawn(move || match vault::sync_with(&dir, &host) {
+            Ok(_) => {
+                let _ = notes.send("!reload".into());
+            }
+            Err(e) => {
+                let _ = notes.send(format!("Sync: {e}"));
+            }
+        });
+    }
+
+    fn reload_entries(self: &Rc<Self>) {
+        let Some(vault) = self.vault() else { return };
+        let Ok(entries) = vault.load_entries() else { return };
+        let changed = {
+            let mut s = self.shared.lock().unwrap();
+            let changed = s.entries.len() != entries.len();
+            s.entries = entries;
+            changed
+        };
+        let writing = {
+            let st = self.st.borrow();
+            st.day == today() && st.draft.as_ref().is_some_and(|d| d.saved)
+        };
+        if changed && !writing {
+            self.render();
+        }
     }
 }

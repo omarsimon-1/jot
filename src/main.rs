@@ -1,3 +1,4 @@
+mod config;
 mod ipc;
 mod markdown;
 mod ui;

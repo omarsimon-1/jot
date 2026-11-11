@@ -106,10 +106,11 @@ fn parse_date(v: &Value, key: &str) -> Result<Option<NaiveDate>> {
 
 fn handle(shared: &SharedRef, req: &Value, note: &Sender<String>) -> Result<Value> {
     let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("");
-    let (vault, entries) = {
+    let (vault, mut entries) = {
         let s = shared.lock().unwrap();
         (s.vault.clone(), s.entries.clone())
     };
+    entries.retain(|e| !e.private);
     if cmd == "status" {
         return Ok(json!({"unlocked": vault.is_some(), "entries": entries.len()}));
     }
@@ -203,9 +204,17 @@ journal read [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--all]
                              print entries as markdown (default: today)
 journal days                 list days that have entries
 journal export <folder>      write plain markdown and media to a folder
+journal summarize [--week|--month] [--model NAME]
+                             summary written by a local Ollama model
 journal mcp                  run as an MCP server for agents (stdio)
+journal sync [HOST|--off]    two-way sync with another machine over SSH/tailnet;
+                             the host is remembered and synced on unlock and lock
+journal backup [FOLDER|--off] copy the encrypted vault to a folder; remembered
+                             and repeated every time the journal locks
 
-Everything except opening the app needs the app running and unlocked.";
+Search, read, days, export and summarize need the app running and unlocked.
+Entries marked private are never included. Sync and backup move only
+encrypted files and work whether or not the app is open.";
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
@@ -245,6 +254,53 @@ pub fn cli(args: &[String]) -> Result<()> {
             println!("Exported {} day(s) to {}", v["days"], abs.display());
         }
         "mcp" => mcp()?,
+        "summarize" => summarize(args)?,
+        "sync" => {
+            let dir = crate::vault::default_dir();
+            match args.get(1).map(String::as_str) {
+                Some("--off") => {
+                    crate::config::set("sync-host", None);
+                    println!("Sync turned off");
+                }
+                arg => {
+                    let host = arg
+                        .map(str::to_string)
+                        .or_else(|| crate::config::get("sync-host"))
+                        .ok_or_else(|| anyhow!("usage: journal sync <host>"))?;
+                    println!("{}", crate::vault::sync_with(&dir, &host)?);
+                    crate::config::set("sync-host", Some(&host));
+                }
+            }
+        }
+        "backup" => {
+            let dir = crate::vault::default_dir();
+            match args.get(1).map(String::as_str) {
+                Some("--off") => {
+                    crate::config::set("backup-dir", None);
+                    println!("Backup turned off");
+                }
+                arg => {
+                    let dest = match arg {
+                        Some(a) => std::path::absolute(a)?.display().to_string(),
+                        None => crate::config::get("backup-dir")
+                            .ok_or_else(|| anyhow!("usage: journal backup <folder>"))?,
+                    };
+                    let n = crate::vault::backup(&dir, std::path::Path::new(&dest))?;
+                    println!("Backed up {n} file(s) to {dest}");
+                    crate::config::set("backup-dir", Some(&dest));
+                }
+            }
+        }
+        // Run by the app when it locks: remembered backup, then remembered sync.
+        "_after-lock" => {
+            let dir = crate::vault::default_dir();
+            if let Some(dest) = crate::config::get("backup-dir") {
+                let _ = crate::vault::backup(&dir, std::path::Path::new(&dest));
+            }
+            if let Some(host) = crate::config::get("sync-host") {
+                let _ = crate::vault::sync_with(&dir, &host);
+            }
+        }
         _ => println!("{USAGE}"),
     }
     Ok(())
@@ -326,5 +382,53 @@ fn mcp() -> Result<()> {
         writeln!(out, "{reply}")?;
         out.flush()?;
     }
+    Ok(())
+}
+
+fn ollama(method: &str, path: &str, body: &str) -> Result<Value> {
+    use std::io::Read;
+    let addr = std::env::var("JOURNAL_OLLAMA").unwrap_or_else(|_| "127.0.0.1:11434".into());
+    let mut stream = std::net::TcpStream::connect(&addr)
+        .map_err(|_| anyhow!("No local model server found at {addr}. Install Ollama and pull a model first."))?;
+    write!(
+        stream,
+        "{method} {path} HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )?;
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply)?;
+    let json = reply.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+    let v: Value = serde_json::from_str(json).map_err(|_| anyhow!("unexpected reply from the model server"))?;
+    if let Some(e) = v.get("error").and_then(Value::as_str) {
+        bail!("model server: {e}");
+    }
+    Ok(v)
+}
+
+fn summarize(args: &[String]) -> Result<()> {
+    let today = Local::now().date_naive();
+    let days = if args.iter().any(|a| a == "--month") { 30 } else { 7 };
+    let since = today - chrono::Duration::days(days - 1);
+    let v = request(&json!({"cmd": "read", "since": since.to_string(), "until": today.to_string()}))?;
+    let md = v["markdown"].as_str().unwrap_or("");
+    if md.trim().is_empty() {
+        println!("Nothing written in the last {days} days.");
+        return Ok(());
+    }
+    let model = match flag(args, "--model").or_else(|| std::env::var("JOURNAL_MODEL").ok()) {
+        Some(m) => m,
+        None => ollama("GET", "/api/tags", "")?["models"][0]["name"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("Ollama has no models yet. Pull one, for example: ollama pull llama3.2"))?,
+    };
+    let prompt = format!(
+        "These are my private journal entries from {since} to {today}. Write a short summary addressed to me \
+         (\"you\"): one paragraph, then a few bullet points covering themes, decisions and open questions. \
+         Use only what the entries say.\n\n{md}"
+    );
+    let body = json!({"model": model, "prompt": prompt, "stream": false}).to_string();
+    let reply = ollama("POST", "/api/generate", &body)?;
+    println!("{}", reply["response"].as_str().unwrap_or("").trim());
     Ok(())
 }

@@ -5,7 +5,7 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{Local, NaiveDate};
+use chrono::{Datelike, Days, Local, Months, NaiveDate};
 use gtk::prelude::*;
 use gtk::{gdk, gdk_pixbuf, gio, glib};
 
@@ -14,7 +14,7 @@ use crate::markdown::{self, Fmt};
 use crate::vault::{self, Entry, Media, Vault};
 
 const APP_ID: &str = "app.journal.Journal";
-const COLUMN: i32 = 520;
+const DEFAULT_FONT: i32 = 14;
 
 const HELP: &str = "Ctrl Enter\tfinish this entry, start the next
 Ctrl B / I\tbold / italic
@@ -23,12 +23,15 @@ Ctrl E\tcode
 Ctrl 1 / 2 / 0\theading / subheading / body
 Ctrl Shift Q\tquote
 Ctrl Shift L\tbullet list
+Ctrl Shift D\tdivider
 Ctrl O\tattach photos or videos (or paste, or drop)
 Ctrl Shift ⌫\tremove the last attachment
 Alt ← / →\tprevious / next day
 Ctrl T\ttoday
+Ctrl M\tcalendar and totals
 Ctrl F\tsearch
 Ctrl Shift E\texport to markdown
+Ctrl + / −\ttext size
 Ctrl D\tlight / dark
 Ctrl L\tlock
 Ctrl /\tthis list";
@@ -50,6 +53,9 @@ struct State {
     save_timer: Option<glib::SourceId>,
     status_timer: Option<glib::SourceId>,
     hits: Vec<NaiveDate>,
+    font: i32,
+    cal_month: NaiveDate,
+    cal_sel: NaiveDate,
 }
 
 pub struct Ui {
@@ -65,6 +71,11 @@ pub struct Ui {
     search_entry: gtk::Entry,
     results: gtk::ListBox,
     help: gtk::Revealer,
+    menu: gtk::Revealer,
+    cal_title: gtk::Label,
+    cal_grid: gtk::Grid,
+    cal_preview: gtk::Label,
+    cal_stats: gtk::Label,
     css: gtk::CssProvider,
     shared: SharedRef,
     dir: PathBuf,
@@ -115,7 +126,41 @@ fn system_prefers_dark() -> (bool, Option<gio::Settings>) {
     }
 }
 
-fn css_for(dark: bool) -> String {
+fn font_file() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"));
+    base.join("journal").join("font-size")
+}
+
+fn load_font() -> i32 {
+    std::fs::read_to_string(font_file())
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .map(|n| n.clamp(10, 30))
+        .unwrap_or(DEFAULT_FONT)
+}
+
+fn show(panel: &gtk::Revealer, on: bool) {
+    // A hidden revealer still takes mouse events, so it is made invisible too.
+    panel.set_visible(on);
+    panel.set_reveal_child(on);
+}
+
+fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn css_for(dark: bool, px: i32) -> String {
+    let (s1, s2, s3) = (px - 1, px - 2, px - 3);
     let (bg, fg, muted, rule, accent, panel) = if dark {
         ("#111111", "#cfcfcf", "#6e6e6e", "#2a2a2a", "#cfcfcf", "#181818")
     } else {
@@ -127,30 +172,40 @@ window, .page {{ background: {bg}; color: {fg}; }}
 * {{ font-family: Georgia, Gelasio, "Noto Serif", serif; }}
 scrolledwindow, viewport {{ background: transparent; }}
 textview.entry, textview.entry text {{ background: transparent; color: {fg}; caret-color: {accent}; }}
-textview.entry {{ font-size: 14px; line-height: 1.55; }}
+textview.entry {{ font-size: {px}px; line-height: 1.55; }}
 textview.entry text selection {{ background: alpha({fg}, 0.18); color: {fg}; }}
-.date {{ font-size: 12px; color: {muted}; margin-top: 36px; margin-bottom: 20px; }}
-.time {{ font-size: 11px; color: {muted}; margin-bottom: 4px; }}
-.muted {{ color: {muted}; font-size: 13px; }}
+.date {{ font-size: {s2}px; color: {muted}; margin-top: 36px; margin-bottom: 20px; }}
+.time {{ font-size: {s3}px; color: {muted}; margin-bottom: 4px; }}
+.muted {{ color: {muted}; font-size: {s1}px; }}
 separator.rule {{ background: {rule}; min-height: 1px; margin-top: 20px; margin-bottom: 20px; }}
-.status {{ color: {muted}; font-size: 12px; margin-bottom: 14px; padding: 4px 12px; background: {bg}; }}
+.status {{ color: {muted}; font-size: {s2}px; margin-bottom: 14px; padding: 4px 12px; background: {bg}; }}
 .lock entry {{ background: transparent; color: {fg}; border: none; border-bottom: 1px solid {rule};
-  border-radius: 0; box-shadow: none; outline: none; font-size: 14px; min-width: 220px; caret-color: {accent}; }}
+  border-radius: 0; box-shadow: none; outline: none; font-size: {px}px; min-width: 220px; caret-color: {accent}; }}
 .lock entry:focus-within {{ border-bottom-color: {accent}; }}
-.lock-msg {{ color: {muted}; font-size: 12px; margin-top: 12px; }}
+.lock-msg {{ color: {muted}; font-size: {s2}px; margin-top: 12px; }}
 .panel {{ background: {panel}; border: 1px solid {rule}; border-radius: 4px; padding: 10px 14px; margin-top: 32px; }}
 .panel entry {{ background: transparent; color: {fg}; border: none; box-shadow: none; outline: none;
-  font-size: 14px; caret-color: {accent}; }}
+  font-size: {px}px; caret-color: {accent}; }}
 .panel list, .panel row {{ background: transparent; color: {fg}; }}
 .panel row {{ padding: 5px 4px; border-radius: 3px; }}
 .panel row:selected {{ background: alpha({fg}, 0.10); }}
-.hit-date {{ color: {muted}; font-size: 11px; }}
-.hit-text {{ font-size: 13px; }}
-.help {{ font-size: 13px; }}
+.hit-date {{ color: {muted}; font-size: {s3}px; }}
+.hit-text {{ font-size: {s1}px; }}
+.help {{ font-size: {s1}px; }}
 button.video {{ background: transparent; color: {muted}; border: 1px solid {rule}; border-radius: 3px;
-  box-shadow: none; padding: 5px 10px; font-size: 13px; }}
+  box-shadow: none; padding: 5px 10px; font-size: {s1}px; }}
 button.video:hover, button.video:focus {{ color: {fg}; border-color: {accent}; }}
 .media {{ margin-top: 10px; }}
+.burger {{ opacity: 0; color: {muted}; font-size: {px}px; margin-top: 36px; margin-bottom: 20px; padding: 0 10px; }}
+.date-row:hover .burger {{ opacity: 1; }}
+.cal-title {{ color: {muted}; font-size: {s2}px; margin-bottom: 8px; }}
+.cal-head {{ color: {muted}; font-size: {s3}px; }}
+.cal-day {{ color: {muted}; font-size: {s1}px; padding: 4px 0; min-width: 34px; border-radius: 3px; opacity: 0.55; }}
+.cal-day.written {{ color: {fg}; font-weight: 700; opacity: 1; }}
+.cal-day.today {{ text-decoration: underline; }}
+.cal-day.selected {{ background: alpha({fg}, 0.12); }}
+.cal-preview {{ font-size: {s1}px; margin-top: 10px; }}
+.cal-stats {{ color: {muted}; font-size: {s2}px; margin-top: 10px; }}
 "#
     )
 }
@@ -205,7 +260,6 @@ impl Ui {
         let page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .halign(gtk::Align::Center)
-            .width_request(COLUMN)
             .build();
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -233,7 +287,7 @@ impl Ui {
             .max_content_height(420)
             .child(&results)
             .build();
-        let search_box = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).width_request(COLUMN - 80).build();
+        let search_box = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).width_request(440).build();
         search_box.add_css_class("panel");
         search_box.append(&search_entry);
         search_box.append(&results_scroll);
@@ -242,6 +296,7 @@ impl Ui {
             .valign(gtk::Align::Start)
             .transition_type(gtk::RevealerTransitionType::Crossfade)
             .transition_duration(100)
+            .visible(false)
             .child(&search_box)
             .build();
 
@@ -259,7 +314,30 @@ impl Ui {
             .valign(gtk::Align::Center)
             .transition_type(gtk::RevealerTransitionType::Crossfade)
             .transition_duration(100)
+            .visible(false)
             .child(&help_box)
+            .build();
+
+        let cal_title = label("", "cal-title");
+        let cal_grid = gtk::Grid::builder().column_homogeneous(true).row_spacing(2).build();
+        let cal_preview = label("", "cal-preview");
+        cal_preview.set_wrap(false);
+        cal_preview.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        cal_preview.set_max_width_chars(34);
+        let cal_stats = label("", "cal-stats");
+        let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        menu_box.add_css_class("panel");
+        menu_box.append(&cal_title);
+        menu_box.append(&cal_grid);
+        menu_box.append(&cal_preview);
+        menu_box.append(&cal_stats);
+        let menu = gtk::Revealer::builder()
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Start)
+            .transition_type(gtk::RevealerTransitionType::Crossfade)
+            .transition_duration(100)
+            .visible(false)
+            .child(&menu_box)
             .build();
 
         let overlay = gtk::Overlay::new();
@@ -267,6 +345,8 @@ impl Ui {
         overlay.add_overlay(&status);
         overlay.add_overlay(&search);
         overlay.add_overlay(&help);
+        overlay.add_overlay(&menu);
+        status.set_can_target(false);
         window.set_child(Some(&overlay));
 
         let css = gtk::CssProvider::new();
@@ -290,6 +370,11 @@ impl Ui {
             search_entry,
             results,
             help,
+            menu,
+            cal_title,
+            cal_grid,
+            cal_preview,
+            cal_stats,
             css,
             shared,
             dir: vault::default_dir(),
@@ -301,6 +386,9 @@ impl Ui {
                 save_timer: None,
                 status_timer: None,
                 hits: Vec::new(),
+                font: load_font(),
+                cal_month: today().with_day(1).unwrap_or_else(today),
+                cal_sel: today(),
             }),
         });
         ui.apply_theme();
@@ -342,13 +430,32 @@ impl Ui {
             }
             let u = ui.clone();
             glib::timeout_add_local_once(Duration::from_millis(600), move || {
-                let d = u.st.borrow().draft.as_ref().map(|d| (d.view.buffer(), d.fmt.clone()));
-                if let Some((b, f)) = d {
-                    b.insert_at_cursor("Writing this ");
-                    f.toggle_inline("bold");
-                    b.insert_at_cursor("right now");
-                    f.toggle_inline("bold");
-                    b.insert_at_cursor(", just a cursor and text.");
+                let d = u.st.borrow().draft.as_ref().map(|d| d.view.buffer());
+                if let Some(b) = d {
+                    use gdk::Key;
+                    let ctrl = gdk::ModifierType::CONTROL_MASK;
+                    let cs = ctrl | gdk::ModifierType::SHIFT_MASK;
+                    b.insert_at_cursor("plain ");
+                    u.on_key(Key::b, ctrl);
+                    b.insert_at_cursor("bold");
+                    u.on_key(Key::b, ctrl);
+                    b.insert_at_cursor(" after");
+                    b.insert_at_cursor("\n");
+                    u.on_key(Key::_1, ctrl);
+                    u.on_key(Key::_1, ctrl);
+                    b.insert_at_cursor("not a heading");
+                    u.on_key(Key::D, cs);
+                    b.insert_at_cursor("below the divider");
+                    eprintln!("markdown: {:?}", markdown::to_markdown(&b));
+                    if std::env::var("JOURNAL_DEBUG_BIG").is_ok() {
+                        u.on_key(Key::equal, ctrl);
+                        u.on_key(Key::equal, ctrl);
+                        u.on_key(Key::equal, ctrl);
+                    }
+                    if std::env::var("JOURNAL_DEBUG_MENU").is_ok() {
+                        u.on_key(Key::m, ctrl);
+                        u.on_key(Key::Left, gdk::ModifierType::empty());
+                    }
                 }
                 if std::env::var("JOURNAL_DEBUG_SEARCH").is_ok() {
                     u.open_search();
@@ -362,6 +469,10 @@ impl Ui {
             let u = ui.clone();
             glib::timeout_add_local_once(Duration::from_millis(2500), move || {
                 let w = &u.window;
+                for (x, y) in [(0.5, 0.5), (0.5, 0.12), (0.5, 0.9), (0.35, 0.3)] {
+                    let hit = w.pick(w.width() as f64 * x, w.height() as f64 * y, gtk::PickFlags::DEFAULT);
+                    eprintln!("pick {x},{y}: {:?}", hit.map(|h| h.type_().name().to_string()));
+                }
                 let paintable = gtk::WidgetPaintable::new(Some(w));
                 let snap = gtk::Snapshot::new();
                 paintable.snapshot(&snap, w.width() as f64, w.height() as f64);
@@ -374,7 +485,12 @@ impl Ui {
     }
 
     fn apply_theme(&self) {
-        self.css.load_from_string(&css_for(self.st.borrow().dark));
+        let (dark, px) = {
+            let st = self.st.borrow();
+            (st.dark, st.font)
+        };
+        self.css.load_from_string(&css_for(dark, px));
+        self.page.set_size_request(px * 37, -1);
     }
 
     fn vault(&self) -> Option<Vault> {
@@ -472,8 +588,9 @@ impl Ui {
             s.entries.clear();
         }
         self.clear_page();
-        self.search.set_reveal_child(false);
-        self.help.set_reveal_child(false);
+        show(&self.search, false);
+        show(&self.help, false);
+        show(&self.menu, false);
         let _ = std::fs::remove_dir_all(tmp_dir());
         self.show_lock();
     }
@@ -503,7 +620,16 @@ impl Ui {
             s.entries.iter().filter(|e| e.date() == day && e.id != draft_id).cloned().collect()
         };
 
-        self.page.append(&label(&day.format("%A, %B %-d, %Y").to_string(), "date"));
+        let date_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        date_row.add_css_class("date-row");
+        date_row.set_halign(gtk::Align::Start);
+        date_row.append(&label(&day.format("%A, %B %-d, %Y").to_string(), "date"));
+        date_row.append(&label("≡", "burger"));
+        let click = gtk::GestureClick::new();
+        let u = self.clone();
+        click.connect_released(move |_, _, _, _| u.toggle_menu());
+        date_row.add_controller(click);
+        self.page.append(&date_row);
         for (i, e) in entries.iter().enumerate() {
             if i > 0 {
                 self.page.append(&rule());
@@ -676,6 +802,7 @@ impl Ui {
     // ---- media ---------------------------------------------------------
 
     fn media_widget(self: &Rc<Self>, vault: &Vault, m: &Media) -> gtk::Widget {
+        let col = self.st.borrow().font * 37;
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.add_css_class("media");
         holder.set_halign(gtk::Align::Start);
@@ -700,7 +827,7 @@ impl Ui {
                         Ok(Ok(())) => {
                             let video = gtk::Video::for_file(Some(&gio::File::for_path(&dest)));
                             video.set_autoplay(true);
-                            video.set_size_request(COLUMN, COLUMN * 9 / 16);
+                            video.set_size_request(col, col * 9 / 16);
                             holder.remove(&b);
                             holder.append(&video);
                         }
@@ -724,7 +851,7 @@ impl Ui {
                     Some((t, w, h)) => {
                         let pic = gtk::Picture::for_paintable(&t);
                         pic.set_content_fit(gtk::ContentFit::Contain);
-                        let width = w.min(COLUMN);
+                        let width = w.min(col);
                         let height = (width as f64 * h as f64 / w.max(1) as f64) as i32;
                         pic.set_size_request(width, height);
                         holder2.append(&pic);
@@ -886,15 +1013,16 @@ impl Ui {
     // ---- search --------------------------------------------------------
 
     fn open_search(&self) {
-        self.help.set_reveal_child(false);
+        show(&self.help, false);
         self.search_entry.set_text("");
-        self.search.set_reveal_child(true);
+        show(&self.search, true);
         self.search_entry.grab_focus();
     }
 
     fn close_overlays(&self) {
-        self.search.set_reveal_child(false);
-        self.help.set_reveal_child(false);
+        show(&self.search, false);
+        show(&self.help, false);
+        show(&self.menu, false);
         if let Some(d) = self.st.borrow().draft.as_ref() {
             d.view.grab_focus();
         }
@@ -934,7 +1062,7 @@ impl Ui {
     fn open_hit(self: &Rc<Self>, index: i32) {
         let day = self.st.borrow().hits.get(index as usize).copied();
         if let Some(day) = day {
-            self.search.set_reveal_child(false);
+            show(&self.search, false);
             self.go_to(day);
             if let Some(d) = self.st.borrow().draft.as_ref() {
                 d.view.grab_focus();
@@ -956,7 +1084,7 @@ impl Ui {
     fn with_fmt(self: &Rc<Self>, f: impl FnOnce(&Fmt)) {
         let fmt = {
             let st = self.st.borrow();
-            st.draft.as_ref().filter(|d| d.view.has_focus()).map(|d| d.fmt.clone())
+            st.draft.as_ref().filter(|d| d.view.is_focus()).map(|d| d.fmt.clone())
         };
         if let Some(fmt) = fmt {
             f(&fmt);
@@ -994,9 +1122,26 @@ impl Ui {
         let alt = mods.contains(gdk::ModifierType::ALT_MASK);
         let k = key.to_lower();
 
-        let overlay_open = self.search.reveals_child() || self.help.reveals_child();
+        let overlay_open = self.search.reveals_child() || self.help.reveals_child() || self.menu.reveals_child();
         if key == Key::Escape && overlay_open {
             self.close_overlays();
+            return true;
+        }
+        if self.menu.reveals_child() && !ctrl {
+            match key {
+                Key::Left => self.cal_move(-1, 0),
+                Key::Right => self.cal_move(1, 0),
+                Key::Up => self.cal_move(-7, 0),
+                Key::Down => self.cal_move(7, 0),
+                Key::Page_Up => self.cal_move(0, -1),
+                Key::Page_Down => self.cal_move(0, 1),
+                Key::Return | Key::KP_Enter => {
+                    let day = self.st.borrow().cal_sel;
+                    show(&self.menu, false);
+                    self.go_to(day);
+                }
+                _ => {}
+            }
             return true;
         }
         if self.search.reveals_child() && !ctrl {
@@ -1023,7 +1168,7 @@ impl Ui {
             if matches!(key, Key::Return | Key::KP_Enter) && !shift {
                 let fmt = {
                     let st = self.st.borrow();
-                    st.draft.as_ref().filter(|d| d.view.has_focus()).map(|d| d.fmt.clone())
+                    st.draft.as_ref().filter(|d| d.view.is_focus()).map(|d| d.fmt.clone())
                 };
                 return fmt.is_some_and(|f| f.handle_return());
             }
@@ -1049,6 +1194,10 @@ impl Ui {
             (Key::Page_Down, _) => self.step_day(true),
             (Key::f, false) => self.open_search(),
             (Key::e, true) => self.export_dialog(),
+            (Key::d, true) => self.with_fmt(|f| f.insert_divider()),
+            (Key::m, false) => self.toggle_menu(),
+            (Key::equal, _) | (Key::plus, _) | (Key::KP_Add, _) => self.set_font(1),
+            (Key::minus, _) | (Key::underscore, _) | (Key::KP_Subtract, _) => self.set_font(-1),
             (Key::d, false) => {
                 let mut st = self.st.borrow_mut();
                 st.dark = !st.dark;
@@ -1056,8 +1205,8 @@ impl Ui {
                 self.apply_theme();
             }
             (Key::slash, _) | (Key::question, _) => {
-                self.search.set_reveal_child(false);
-                self.help.set_reveal_child(!self.help.reveals_child());
+                show(&self.search, false);
+                show(&self.help, !self.help.reveals_child());
             }
             _ => return false,
         }
@@ -1105,5 +1254,156 @@ impl Ui {
             }
             std::mem::forget(bus);
         }
+    }
+}
+
+// ---- text size, calendar and totals ------------------------------------
+
+impl Ui {
+    fn set_font(self: &Rc<Self>, delta: i32) {
+        let px = {
+            let mut st = self.st.borrow_mut();
+            st.font = (st.font + delta).clamp(10, 30);
+            st.font
+        };
+        let file = font_file();
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(file, px.to_string());
+        self.apply_theme();
+        self.render();
+    }
+
+    fn toggle_menu(self: &Rc<Self>) {
+        if self.menu.reveals_child() {
+            self.close_overlays();
+            return;
+        }
+        self.save_draft();
+        {
+            let mut st = self.st.borrow_mut();
+            st.cal_sel = st.day;
+            st.cal_month = st.day.with_day(1).unwrap_or(st.day);
+        }
+        show(&self.search, false);
+        show(&self.help, false);
+        self.render_calendar();
+        show(&self.menu, true);
+    }
+
+    fn cal_move(self: &Rc<Self>, days: i64, months: i32) {
+        {
+            let mut st = self.st.borrow_mut();
+            let mut sel = st.cal_sel;
+            if days != 0 {
+                let step = Days::new(days.unsigned_abs());
+                sel = if days > 0 { sel.checked_add_days(step) } else { sel.checked_sub_days(step) }.unwrap_or(sel);
+            }
+            if months != 0 {
+                let step = Months::new(months.unsigned_abs());
+                sel = if months > 0 { sel.checked_add_months(step) } else { sel.checked_sub_months(step) }.unwrap_or(sel);
+            }
+            st.cal_sel = sel.min(today());
+            st.cal_month = st.cal_sel.with_day(1).unwrap_or(st.cal_sel);
+        }
+        self.render_calendar();
+    }
+
+    fn render_calendar(self: &Rc<Self>) {
+        while let Some(c) = self.cal_grid.first_child() {
+            self.cal_grid.remove(&c);
+        }
+        let (month, sel) = {
+            let st = self.st.borrow();
+            (st.cal_month, st.cal_sel)
+        };
+        let entries = self.shared.lock().unwrap().entries.clone();
+        let by_day = vault::group_by_day(&entries);
+        let now = today();
+
+        self.cal_title.set_text(&month.format("%B %Y").to_string());
+        for (i, d) in ["M", "T", "W", "T", "F", "S", "S"].iter().enumerate() {
+            let head = gtk::Label::new(Some(d));
+            head.add_css_class("cal-head");
+            self.cal_grid.attach(&head, i as i32, 0, 1, 1);
+        }
+        let offset = month.weekday().num_days_from_monday() as i32;
+        let mut day = month;
+        while day.month() == month.month() {
+            let cell = gtk::Label::new(Some(&day.day().to_string()));
+            cell.add_css_class("cal-day");
+            if by_day.contains_key(&day) {
+                cell.add_css_class("written");
+            }
+            if day == now {
+                cell.add_css_class("today");
+            }
+            if day == sel {
+                cell.add_css_class("selected");
+            }
+            if day <= now {
+                let click = gtk::GestureClick::new();
+                let u = self.clone();
+                click.connect_released(move |_, _, _, _| {
+                    show(&u.menu, false);
+                    u.go_to(day);
+                });
+                cell.add_controller(click);
+            }
+            let slot = offset + day.day0() as i32;
+            self.cal_grid.attach(&cell, slot % 7, 1 + slot / 7, 1, 1);
+            match day.succ_opt() {
+                Some(next) => day = next,
+                None => break,
+            }
+        }
+
+        let preview = by_day
+            .get(&sel)
+            .map(|es| es.iter().map(|e| ipc::plain(&e.text)).collect::<Vec<_>>().join(" "))
+            .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default();
+        self.cal_preview.set_text(&preview.chars().take(160).collect::<String>());
+
+        let count = |es: &[&Entry]| {
+            es.iter().fold((0usize, 0usize), |(w, c), e| {
+                let text = ipc::plain(&e.text);
+                (w + text.split_whitespace().count(), c + text.chars().filter(|ch| *ch != '\n').count())
+            })
+        };
+        let (mut m_days, mut m_words, mut m_chars, mut words, mut chars) = (0, 0, 0, 0, 0);
+        let (mut longest, mut run, mut prev): (u32, u32, Option<NaiveDate>) = (0, 0, None);
+        for (d, es) in &by_day {
+            let (w, c) = count(es);
+            words += w;
+            chars += c;
+            if d.year() == month.year() && d.month() == month.month() {
+                m_days += 1;
+                m_words += w;
+                m_chars += c;
+            }
+            run = if prev.and_then(|p| p.succ_opt()) == Some(*d) { run + 1 } else { 1 };
+            longest = longest.max(run);
+            prev = Some(*d);
+        }
+        let mut streak = 0;
+        let mut d = if by_day.contains_key(&now) { Some(now) } else { now.pred_opt() };
+        while let Some(x) = d.filter(|x| by_day.contains_key(x)) {
+            streak += 1;
+            d = x.pred_opt();
+        }
+        self.cal_stats.set_text(&format!(
+            "{} · {} days · {} words · {} characters\nall time · {} days · {} words · {} characters\nstreak {} · longest {}",
+            month.format("%B"),
+            m_days,
+            thousands(m_words),
+            thousands(m_chars),
+            by_day.len(),
+            thousands(words),
+            thousands(chars),
+            streak,
+            longest
+        ));
     }
 }

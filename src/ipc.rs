@@ -36,6 +36,7 @@ pub fn plain(text: &str) -> String {
         if n > 0 {
             out.push('\n');
         }
+        let line = if line == "***" { "" } else { line };
         let line = ["## ", "# ", "> "].iter().find_map(|p| line.strip_prefix(p)).unwrap_or(line);
         let mut chars = line.chars();
         while let Some(c) = chars.next() {

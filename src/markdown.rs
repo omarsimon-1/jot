@@ -10,6 +10,7 @@ use gtk::prelude::*;
 pub const INLINE: [&str; 4] = ["bold", "italic", "strike", "code"];
 pub const BLOCK: [&str; 3] = ["h1", "h2", "quote"];
 const BULLET: &str = "• ";
+const HR: &str = "────────────";
 
 fn marker(tag: &str) -> &'static str {
     match tag {
@@ -39,6 +40,7 @@ pub fn setup_tags(buffer: &gtk::TextBuffer) {
     buffer.create_tag(Some("code"), &[("family", &"monospace"), ("scale", &0.88f64)]);
     buffer.create_tag(Some("h1"), &[("scale", &1.3f64), ("weight", &700i32)]);
     buffer.create_tag(Some("h2"), &[("scale", &1.12f64), ("weight", &700i32)]);
+    buffer.create_tag(Some("hr"), &[("justification", &gtk::Justification::Center)]);
     buffer.create_tag(Some("quote"), &[("left-margin", &18i32), ("style", &pango::Style::Italic)]);
 }
 
@@ -48,6 +50,10 @@ fn names_at(iter: &gtk::TextIter) -> Vec<&'static str> {
         .filter_map(|t| t.name())
         .filter_map(|n| canon(n.as_str()))
         .collect()
+}
+
+fn is_hr(iter: &gtk::TextIter) -> bool {
+    iter.tags().iter().any(|t| t.name().is_some_and(|n| n == "hr"))
 }
 
 fn escape(text: &str) -> String {
@@ -98,6 +104,10 @@ pub fn to_markdown(buffer: &gtk::TextBuffer) -> String {
             end.forward_to_line_end();
         }
         let mut line = String::new();
+        if start != end && is_hr(&start) {
+            lines.push("***".to_string());
+            continue;
+        }
         if start != end {
             if let Some(b) = names_at(&start).into_iter().find(|t| BLOCK.contains(t)) {
                 line.push_str(block_prefix(b));
@@ -180,6 +190,10 @@ pub fn load_markdown(buffer: &gtk::TextBuffer, md: &str) {
         if n > 0 {
             buffer.insert(&mut iter, "\n");
         }
+        if raw == "***" {
+            buffer.insert_with_tags_by_name(&mut iter, HR, &["hr"]);
+            continue;
+        }
         let mut line = raw;
         let mut block = None;
         for b in BLOCK {
@@ -210,11 +224,12 @@ pub struct Fmt {
     /// Formatting chosen at a cursor position before anything is typed there.
     pending: RefCell<Option<(i32, Vec<&'static str>)>>,
     inserted: Cell<Option<(i32, i32)>>,
+    raw: Cell<bool>,
 }
 
 impl Fmt {
     pub fn attach(buffer: &gtk::TextBuffer) -> Rc<Fmt> {
-        let fmt = Rc::new(Fmt { buffer: buffer.clone(), pending: RefCell::new(None), inserted: Cell::new(None) });
+        let fmt = Rc::new(Fmt { buffer: buffer.clone(), pending: RefCell::new(None), inserted: Cell::new(None), raw: Cell::new(false) });
         let f = fmt.clone();
         buffer.connect_insert_text(move |_, iter, text| {
             f.inserted.set(Some((iter.offset(), text.chars().count() as i32)));
@@ -248,6 +263,9 @@ impl Fmt {
     }
 
     fn style_insert(&self, start: i32, len: i32) {
+        if self.raw.get() {
+            return;
+        }
         let s = self.buffer.iter_at_offset(start);
         let e = self.buffer.iter_at_offset(start + len);
         let mut want = self.inherited(&s, &e);
@@ -264,6 +282,7 @@ impl Fmt {
             *pending = None;
         }
         drop(pending);
+        self.buffer.remove_tag_by_name("hr", &s, &e);
         for t in INLINE.iter().chain(BLOCK.iter()) {
             if want.contains(t) {
                 self.buffer.apply_tag_by_name(t, &s, &e);
@@ -338,11 +357,25 @@ impl Fmt {
             }
             if s == e && first == last {
                 let (offset, mut set) = self.active_at_cursor();
+                let was_on = name.is_some_and(|n| set.contains(&n));
                 set.retain(|t| INLINE.contains(t));
-                set.extend(apply);
+                set.extend(apply.filter(|_| !was_on));
                 self.pending.replace(Some((offset, set)));
             }
         }
+    }
+
+    /// Puts a short centred rule on its own line and leaves the cursor below it.
+    pub fn insert_divider(&self) {
+        let mut cur = self.cursor();
+        if !cur.starts_line() {
+            self.buffer.insert(&mut cur, "\n");
+        }
+        self.raw.set(true);
+        self.buffer.insert_with_tags_by_name(&mut cur, HR, &["hr"]);
+        self.raw.set(false);
+        self.buffer.insert(&mut cur, "\n");
+        self.buffer.place_cursor(&cur);
     }
 
     pub fn toggle_bullet(&self) {
@@ -402,6 +435,7 @@ mod tests {
             "**bold *both* bold**",
             "# Title\n## Sub\n> quoted *line*\n- one\n- **two**\n\nlast",
             "literal \\* star and \\\\ slash",
+            "above\n***\nbelow",
             "",
         ] {
             assert_eq!(roundtrip(md), md);
@@ -433,5 +467,14 @@ mod tests {
         assert!(f.handle_return());
         b.insert_at_cursor("next");
         assert_eq!(to_markdown(&b), "plain **bold more** done\n# Heading\n- body\n- next");
+
+        // A block format chosen on an empty line is undone by the same shortcut.
+        b.insert_at_cursor("\n");
+        f.set_block(Some("h2"));
+        f.set_block(Some("h2"));
+        b.insert_at_cursor("plain again");
+        f.insert_divider();
+        b.insert_at_cursor("after");
+        assert!(to_markdown(&b).ends_with("- next\nplain again\n***\nafter"));
     }
 }

@@ -366,27 +366,12 @@ impl Fmt {
         }
     }
 
-    /// Hides everything except the last `words` words (or shows it all again).
-    pub fn veil(&self, words: Option<usize>) {
+    /// Hides everything except the last `chars` characters (or shows it all again).
+    pub fn veil(&self, chars: Option<usize>) {
         let (start, end) = self.buffer.bounds();
         self.buffer.remove_tag_by_name("veil", &start, &end);
-        let Some(words) = words else { return };
-        let chars: Vec<char> = self.buffer.text(&start, &end, true).chars().collect();
-        let mut i = chars.len();
-        let mut seen = 0;
-        while i > 0 {
-            while i > 0 && chars[i - 1].is_whitespace() {
-                i -= 1;
-            }
-            if i == 0 || seen == words {
-                break;
-            }
-            while i > 0 && !chars[i - 1].is_whitespace() {
-                i -= 1;
-            }
-            seen += 1;
-        }
-        let cut = self.buffer.iter_at_offset(i as i32);
+        let Some(chars) = chars else { return };
+        let cut = self.buffer.iter_at_offset((end.offset() - chars as i32).max(0));
         self.buffer.apply_tag_by_name("veil", &start, &cut);
     }
 

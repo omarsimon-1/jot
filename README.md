@@ -38,7 +38,7 @@ be recovered. Press Ctrl+/ in the app for every shortcut.
 
 - Entries are timestamped at their first words. Ctrl+Enter starts the next one.
 - Ctrl+M opens the calendar: days written, streaks, words and characters.
-- Ctrl+Shift+P shows only the last few words, for writing in public.
+- Ctrl+Shift+P shows only the last few characters, for writing in public. Ctrl+[ and Ctrl+] show fewer or more.
 - Ctrl+Shift+H keeps an entry private from agents.
 
 ## Agents, sync and backup
@@ -46,7 +46,7 @@ be recovered. Press Ctrl+/ in the app for every shortcut.
 Run `journal help` for the full list.
 
 - `journal search`, `journal read`, `journal mcp`: read-only access for agents while the app is unlocked. Private entries are never included.
-- `journal summarize`: a weekly or monthly summary written by a local Ollama model.
+- `journal summarize` and `journal ask <question>`: handed to your Omarchy default agent (`omarchy default agent`), or to a local Ollama model with `--ollama`. With a cloud agent the entries in that period leave your machine; private entries never do.
 - `journal sync <host>`: two-way sync with another machine over SSH or a tailnet. Only encrypted files travel. The host is remembered and synced on every unlock and lock.
 - `journal backup <folder>`: copies the encrypted vault; remembered and repeated on every lock.
 

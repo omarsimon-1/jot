@@ -204,8 +204,11 @@ journal read [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--all]
                              print entries as markdown (default: today)
 journal days                 list days that have entries
 journal export <folder>      write plain markdown and media to a folder
-journal summarize [--week|--month] [--model NAME]
-                             summary written by a local Ollama model
+journal summarize [--week|--month|--all|--since YYYY-MM-DD]
+                             a summary written by your Omarchy default agent
+journal ask <question>       ask your agent anything about the last 30 days
+                             (same period flags; --agent NAME picks another
+                             agent, --ollama uses a local model instead)
 journal mcp                  run as an MCP server for agents (stdio)
 journal sync [HOST|--off]    two-way sync with another machine over SSH/tailnet;
                              the host is remembered and synced on unlock and lock
@@ -254,7 +257,7 @@ pub fn cli(args: &[String]) -> Result<()> {
             println!("Exported {} day(s) to {}", v["days"], abs.display());
         }
         "mcp" => mcp()?,
-        "summarize" => summarize(args)?,
+        "summarize" | "ask" => summarize(args)?,
         "sync" => {
             let dir = crate::vault::default_dir();
             match args.get(1).map(String::as_str) {
@@ -405,30 +408,107 @@ fn ollama(method: &str, path: &str, body: &str) -> Result<Value> {
     Ok(v)
 }
 
-fn summarize(args: &[String]) -> Result<()> {
-    let today = Local::now().date_naive();
-    let days = if args.iter().any(|a| a == "--month") { 30 } else { 7 };
-    let since = today - chrono::Duration::days(days - 1);
-    let v = request(&json!({"cmd": "read", "since": since.to_string(), "until": today.to_string()}))?;
-    let md = v["markdown"].as_str().unwrap_or("");
-    if md.trim().is_empty() {
-        println!("Nothing written in the last {days} days.");
-        return Ok(());
+/// The coding agent chosen with `omarchy default agent`.
+fn default_agent() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let file = std::path::Path::new(&home).join(".config/omarchy/defaults/agent");
+    let name = std::fs::read_to_string(file).ok()?.lines().next()?.trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Asks an agent CLI one question without opening its interactive session.
+fn run_agent(agent: &str, prompt: &str) -> Result<String> {
+    use std::process::{Command, Stdio};
+    let (args, on_stdin): (&[&str], bool) = match agent {
+        "claude" => (&["-p"], true),
+        "codex" => (&["exec", "-"], true),
+        "gemini" | "copilot" | "cursor-agent" | "pi" | "omp" | "grok" => (&["-p"], false),
+        "opencode" | "crush" => (&["run"], false),
+        other => bail!("Journal does not know how to ask {other} a one-off question. Try --agent claude or --ollama."),
+    };
+    let mut cmd = Command::new(agent);
+    cmd.args(args).current_dir(std::env::temp_dir()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if on_stdin {
+        cmd.stdin(Stdio::piped());
+    } else {
+        if prompt.len() > 120_000 {
+            bail!("That is too much text to hand to {agent} at once. Try a shorter period.");
+        }
+        cmd.arg(prompt).stdin(Stdio::null());
     }
-    let model = match flag(args, "--model").or_else(|| std::env::var("JOURNAL_MODEL").ok()) {
+    let mut child = cmd.spawn().map_err(|_| anyhow!("{agent} is not installed on this machine."))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(prompt.as_bytes())?;
+    }
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!("{agent} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn run_ollama(model: Option<String>, prompt: &str) -> Result<String> {
+    let model = match model.or_else(|| std::env::var("JOURNAL_MODEL").ok()) {
         Some(m) => m,
         None => ollama("GET", "/api/tags", "")?["models"][0]["name"]
             .as_str()
             .map(str::to_string)
             .ok_or_else(|| anyhow!("Ollama has no models yet. Pull one, for example: ollama pull llama3.2"))?,
     };
-    let prompt = format!(
-        "These are my private journal entries from {since} to {today}. Write a short summary addressed to me \
-         (\"you\"): one paragraph, then a few bullet points covering themes, decisions and open questions. \
-         Use only what the entries say.\n\n{md}"
-    );
     let body = json!({"model": model, "prompt": prompt, "stream": false}).to_string();
-    let reply = ollama("POST", "/api/generate", &body)?;
-    println!("{}", reply["response"].as_str().unwrap_or("").trim());
+    Ok(ollama("POST", "/api/generate", &body)?["response"].as_str().unwrap_or("").trim().to_string())
+}
+
+/// `journal summarize` and `journal ask`: hand a stretch of entries to an agent.
+fn summarize(args: &[String]) -> Result<()> {
+    let today = Local::now().date_naive();
+    let mut question: Vec<&str> = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--since" | "--agent" | "--model" => i += 1,
+            a if a.starts_with("--") => {}
+            a => question.push(a),
+        }
+        i += 1;
+    }
+    let has = |f: &str| args.iter().any(|a| a == f);
+    let since = match flag(args, "--since") {
+        Some(d) => NaiveDate::parse_from_str(&d, "%Y-%m-%d").map_err(|_| anyhow!("--since must be YYYY-MM-DD"))?,
+        None if has("--all") => NaiveDate::MIN,
+        None if has("--month") || (args[0] == "ask" && !has("--week")) => today - chrono::Duration::days(29),
+        None => today - chrono::Duration::days(6),
+    };
+    let since_text = if since == NaiveDate::MIN { "0001-01-01".to_string() } else { since.to_string() };
+    let v = request(&json!({"cmd": "read", "since": since_text, "until": today.to_string()}))?;
+    let md = v["markdown"].as_str().unwrap_or("");
+    if md.trim().is_empty() {
+        println!("Nothing written in that period.");
+        return Ok(());
+    }
+    let task = if args[0] == "ask" {
+        if question.is_empty() {
+            bail!("usage: journal ask <question>");
+        }
+        format!("Answer this question using only my journal entries below, addressing me as \"you\": {}", question.join(" "))
+    } else {
+        "Write a short summary of my journal entries below, addressed to me (\"you\"): one paragraph, then a few \
+         bullet points covering themes, decisions and open questions. Use only what the entries say."
+            .to_string()
+    };
+    let prompt = format!("{task}\n\nDo not use any tools; reply with the text only.\n\n{md}");
+    let agent = if has("--ollama") { None } else { flag(args, "--agent").or_else(default_agent) };
+    let days = v["days"].as_u64().unwrap_or(0);
+    let reply = match agent {
+        Some(agent) => {
+            eprintln!("Sending {days} day(s) of entries to {agent}. Private entries are left out.");
+            run_agent(&agent, &prompt)?
+        }
+        None => {
+            eprintln!("No Omarchy default agent is set, so using a local Ollama model.");
+            run_ollama(flag(args, "--model"), &prompt)?
+        }
+    };
+    println!("{reply}");
     Ok(())
 }

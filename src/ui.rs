@@ -25,7 +25,7 @@ Ctrl Shift Q\tquote
 Ctrl Shift L\tbullet list
 Ctrl Shift D\tdivider
 Ctrl Shift H\tkeep this entry private from agents
-Ctrl Shift P\tshow only the last few words (Ctrl 1–5 sets how many)
+Ctrl Shift P\tshow only the last few characters\nCtrl [ / ]\t  fewer / more characters shown
 Ctrl O\tattach photos or videos (or paste, or drop)
 Ctrl Shift ⌫\tremove the last attachment
 Alt ← / →\tprevious / next day
@@ -37,7 +37,7 @@ Ctrl + / −\ttext size
 Ctrl D\tlight / dark
 Ctrl L\tlock
 Ctrl Shift K\tchange password
-Ctrl /\tthis list";
+Ctrl / or F1\tthis list";
 
 struct Draft {
     entry: Entry,
@@ -229,6 +229,7 @@ button.video:hover, button.video:focus {{ color: {fg}; border-color: {accent}; }
 .cal-day.today {{ text-decoration: underline; }}
 .cal-day.selected {{ background: alpha({fg}, 0.12); }}
 .cal-preview {{ font-size: {s1}px; margin-top: 10px; }}
+.cal-link {{ color: {muted}; font-size: {s2}px; margin-top: 8px; text-decoration: underline; }}
 .cal-stats {{ color: {muted}; font-size: {s2}px; margin-top: 10px; }}
 "#
     )
@@ -477,7 +478,8 @@ impl Ui {
                     u.on_key(Key::H, cs);
                     if std::env::var("JOURNAL_DEBUG_VEIL").is_ok() {
                         u.on_key(Key::P, cs);
-                        u.on_key(Key::_4, ctrl);
+                        u.on_key(Key::bracketleft, ctrl);
+                        u.on_key(Key::bracketleft, ctrl);
                     }
                     if std::env::var("JOURNAL_DEBUG_TOP").is_ok() {
                         let u2 = u.clone();
@@ -1269,6 +1271,10 @@ impl Ui {
             self.close_overlays();
             return true;
         }
+        if key == Key::F1 {
+            self.toggle_help();
+            return true;
+        }
         if self.menu.reveals_child() && !ctrl {
             match key {
                 Key::Left => self.cal_move(-1, 0),
@@ -1316,23 +1322,10 @@ impl Ui {
             }
             return false;
         }
-        if self.st.borrow().veil.is_some() {
-            let words = match key {
-                Key::_1 => Some(1),
-                Key::_2 => Some(2),
-                Key::_3 => Some(3),
-                Key::_4 => Some(4),
-                Key::_5 => Some(5),
-                _ => None,
-            };
-            if words.is_some() {
-                self.st.borrow_mut().veil = words;
-                self.apply_veil();
-                return true;
-            }
-        }
         match (k, shift) {
             (Key::p, true) => self.toggle_veil(),
+            (Key::bracketleft, _) | (Key::braceleft, _) => self.veil_step(-1),
+            (Key::bracketright, _) | (Key::braceright, _) => self.veil_step(1),
             (Key::h, true) => self.toggle_private(),
             (Key::k, true) => self.start_password_change(),
             (Key::Return, _) | (Key::KP_Enter, _) => self.new_entry(),
@@ -1364,10 +1357,7 @@ impl Ui {
                 drop(st);
                 self.apply_theme();
             }
-            (Key::slash, _) | (Key::question, _) => {
-                show(&self.search, false);
-                show(&self.help, !self.help.reveals_child());
-            }
+            (Key::slash, _) | (Key::question, _) => self.toggle_help(),
             _ => return false,
         }
         true
@@ -1523,6 +1513,15 @@ impl Ui {
             }
         }
 
+        let last_row = 1 + (offset + day.pred_opt().map(|d| d.day0() as i32).unwrap_or(27)) / 7;
+        let link = gtk::Label::builder().label("shortcuts").xalign(0.0).build();
+        link.add_css_class("cal-link");
+        let click = gtk::GestureClick::new();
+        let u = self.clone();
+        click.connect_released(move |_, _, _, _| u.toggle_help());
+        link.add_controller(click);
+        self.cal_grid.attach(&link, 0, last_row + 1, 7, 1);
+
         let preview = by_day
             .get(&sel)
             .map(|es| es.iter().map(|e| ipc::plain(&e.text)).collect::<Vec<_>>().join(" "))
@@ -1578,7 +1577,8 @@ impl Ui {
     fn toggle_veil(self: &Rc<Self>) {
         let on = {
             let mut st = self.st.borrow_mut();
-            st.veil = if st.veil.is_some() { None } else { Some(3) };
+            let chars = crate::config::get("veil-chars").and_then(|v| v.parse().ok()).unwrap_or(12);
+            st.veil = if st.veil.is_some() { None } else { Some(chars) };
             st.veil.is_some()
         };
         if on && self.st.borrow().day != today() {
@@ -1588,7 +1588,29 @@ impl Ui {
         }
     }
 
-    /// While veiled, only the last few words being written are on screen.
+    fn veil_step(self: &Rc<Self>, delta: i32) {
+        let chars = {
+            let mut st = self.st.borrow_mut();
+            let Some(n) = st.veil else { return };
+            let n = (n as i32 + delta).clamp(1, 80) as usize;
+            st.veil = Some(n);
+            n
+        };
+        crate::config::set("veil-chars", Some(&chars.to_string()));
+        self.apply_veil();
+    }
+
+    fn toggle_help(self: &Rc<Self>) {
+        let on = !self.help.reveals_child();
+        show(&self.search, false);
+        show(&self.menu, false);
+        show(&self.help, on);
+        if !on {
+            self.close_overlays();
+        }
+    }
+
+    /// While veiled, only the last few characters being written are on screen.
     fn apply_veil(&self) {
         let st = self.st.borrow();
         let Some(d) = st.draft.as_ref() else { return };

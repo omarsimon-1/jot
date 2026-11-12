@@ -550,7 +550,7 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         let v = Vault::create(&d, "demo").unwrap();
         let pb = Pixbuf::new(Colorspace::Rgb, false, 8, 900, 500).unwrap();
-        pb.fill(0x7a9e9fff);
+        pb.fill(0x8c8c8cff);
         let png = pb.save_to_bufferv("png", &[]).unwrap();
         let photo = v.import_png(&png).unwrap();
         fs::write(d.join("clip.mp4"), b"not a real video").unwrap();

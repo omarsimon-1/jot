@@ -11,6 +11,9 @@ pub const INLINE: [&str; 4] = ["bold", "italic", "strike", "code"];
 pub const BLOCK: [&str; 3] = ["h1", "h2", "quote"];
 const BULLET: &str = "• ";
 const HR: &str = "────────────";
+/// How a private section is marked in stored markdown, and what the writer sees.
+pub const PRIVATE_MD: &str = "<!--private-->";
+const PRIVATE_TEXT: &str = "private";
 
 fn marker(tag: &str) -> &'static str {
     match tag {
@@ -40,6 +43,7 @@ pub fn setup_tags(buffer: &gtk::TextBuffer) {
     buffer.create_tag(Some("code"), &[("family", &"monospace"), ("scale", &0.88f64)]);
     buffer.create_tag(Some("h1"), &[("scale", &1.3f64), ("weight", &700i32)]);
     buffer.create_tag(Some("h2"), &[("scale", &1.12f64), ("weight", &700i32)]);
+    buffer.create_tag(Some("privmark"), &[("scale", &0.8f64), ("family", &"monospace")]);
     buffer.create_tag(Some("veil"), &[("invisible", &true)]);
     buffer.create_tag(Some("hr"), &[("justification", &gtk::Justification::Center)]);
     buffer.create_tag(Some("quote"), &[("left-margin", &18i32), ("style", &pango::Style::Italic)]);
@@ -55,6 +59,17 @@ fn names_at(iter: &gtk::TextIter) -> Vec<&'static str> {
 
 fn is_hr(iter: &gtk::TextIter) -> bool {
     iter.tags().iter().any(|t| t.name().is_some_and(|n| n == "hr"))
+}
+
+fn line_has_tag(start: &gtk::TextIter, end: &gtk::TextIter, name: &str) -> bool {
+    let mut it = *start;
+    while it < *end {
+        if it.tags().iter().any(|t| t.name().is_some_and(|n| n == name)) {
+            return true;
+        }
+        it.forward_char();
+    }
+    false
 }
 
 fn escape(text: &str) -> String {
@@ -105,6 +120,10 @@ pub fn to_markdown(buffer: &gtk::TextBuffer) -> String {
             end.forward_to_line_end();
         }
         let mut line = String::new();
+        if line_has_tag(&start, &end, "privmark") {
+            lines.push(PRIVATE_MD.to_string());
+            continue;
+        }
         if start != end && is_hr(&start) {
             lines.push("***".to_string());
             continue;
@@ -190,6 +209,10 @@ pub fn load_markdown(buffer: &gtk::TextBuffer, md: &str) {
     for (n, raw) in md.split('\n').enumerate() {
         if n > 0 {
             buffer.insert(&mut iter, "\n");
+        }
+        if raw == PRIVATE_MD {
+            buffer.insert_with_tags_by_name(&mut iter, PRIVATE_TEXT, &["privmark"]);
+            continue;
         }
         if raw == "***" {
             buffer.insert_with_tags_by_name(&mut iter, HR, &["hr"]);
@@ -284,6 +307,7 @@ impl Fmt {
         }
         drop(pending);
         self.buffer.remove_tag_by_name("hr", &s, &e);
+        self.buffer.remove_tag_by_name("privmark", &s, &e);
         for t in INLINE.iter().chain(BLOCK.iter()) {
             if want.contains(t) {
                 self.buffer.apply_tag_by_name(t, &s, &e);
@@ -375,6 +399,43 @@ impl Fmt {
         self.buffer.apply_tag_by_name("veil", &start, &cut);
     }
 
+    /// Marks (or unmarks) the section the cursor is in as private. A section is
+    /// the text between two dividers, or the whole entry when there are none.
+    pub fn toggle_private_section(&self) {
+        let lines = self.buffer.line_count();
+        let is_rule = |l: i32| self.line_bounds(l).is_some_and(|(s, e)| s != e && is_hr(&s));
+        let mut first = self.cursor().line();
+        if is_rule(first) && first + 1 < lines {
+            first += 1;
+        } else {
+            while first > 0 && !is_rule(first - 1) {
+                first -= 1;
+            }
+        }
+        let mut last = first;
+        while last + 1 < lines && !is_rule(last + 1) {
+            last += 1;
+        }
+        let marked = (first..=last)
+            .find(|l| self.line_bounds(*l).is_some_and(|(s, e)| line_has_tag(&s, &e, "privmark")));
+        match marked {
+            Some(line) => {
+                let Some((mut s, mut e)) = self.line_bounds(line) else { return };
+                if !e.forward_char() {
+                    s.backward_char();
+                }
+                self.buffer.delete(&mut s, &mut e);
+            }
+            None => {
+                let Some(mut at) = self.buffer.iter_at_line(first) else { return };
+                self.raw.set(true);
+                self.buffer.insert_with_tags_by_name(&mut at, PRIVATE_TEXT, &["privmark"]);
+                self.buffer.insert(&mut at, "\n");
+                self.raw.set(false);
+            }
+        }
+    }
+
     /// Puts a short centred rule on its own line and leaves the cursor below it.
     pub fn insert_divider(&self) {
         let mut cur = self.cursor();
@@ -446,6 +507,7 @@ mod tests {
             "# Title\n## Sub\n> quoted *line*\n- one\n- **two**\n\nlast",
             "literal \\* star and \\\\ slash",
             "above\n***\nbelow",
+            "open\n***\n<!--private-->\nsecret\n***\nopen again",
             "",
         ] {
             assert_eq!(roundtrip(md), md);
@@ -486,5 +548,13 @@ mod tests {
         f.insert_divider();
         b.insert_at_cursor("after");
         assert!(to_markdown(&b).ends_with("- next\nplain again\n***\nafter"));
+
+        // Private marks only the section under the cursor, and toggles off again.
+        f.toggle_private_section();
+        assert!(to_markdown(&b).ends_with("plain again\n***\n<!--private-->\nafter"));
+        b.insert_at_cursor(" more");
+        assert!(to_markdown(&b).ends_with("***\n<!--private-->\nafter more"));
+        f.toggle_private_section();
+        assert!(to_markdown(&b).ends_with("plain again\n***\nafter more"));
     }
 }

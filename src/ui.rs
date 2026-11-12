@@ -24,7 +24,7 @@ Ctrl 1 / 2 / 0\theading / subheading / body
 Ctrl Shift Q\tquote
 Ctrl Shift L\tbullet list
 Ctrl Shift D\tdivider
-Ctrl Shift H\tkeep this entry private from agents
+Ctrl Shift H\tkeep this section private from agents
 Ctrl Shift P\tshow only the last few characters\nCtrl [ / ]\t  fewer / more characters shown
 Ctrl O\tattach photos or videos (or paste, or drop)
 Ctrl Shift ⌫\tremove the last attachment
@@ -192,7 +192,8 @@ fn css_for(dark: bool, px: i32) -> String {
     format!(
         r#"
 window, .page {{ background: {bg}; color: {fg}; }}
-* {{ font-family: Georgia, Gelasio, "Noto Serif", serif; }}
+* {{ font-family: monospace; }}
+textview.entry, .hit-text, .cal-preview {{ font-family: Georgia, Gelasio, "Noto Serif", serif; }}
 scrolledwindow, viewport {{ background: transparent; }}
 textview.entry, textview.entry text {{ background: transparent; color: {fg}; caret-color: {accent}; }}
 textview.entry {{ font-size: {px}px; line-height: 1.55; }}
@@ -329,7 +330,7 @@ impl Ui {
         help_label.add_css_class("help");
         let tabs = gtk::pango::TabArray::new(1, true);
         let mut tabs = tabs;
-        tabs.set_tab(0, gtk::pango::TabAlign::Left, 130);
+        tabs.set_tab(0, gtk::pango::TabAlign::Left, 150);
         help_label.set_tabs(Some(&tabs));
         let help_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         help_box.add_css_class("panel");
@@ -463,6 +464,29 @@ impl Ui {
                     use gdk::Key;
                     let ctrl = gdk::ModifierType::CONTROL_MASK;
                     let cs = ctrl | gdk::ModifierType::SHIFT_MASK;
+                    if std::env::var("JOURNAL_DEBUG_CLEAN").is_ok() {
+                        b.insert_at_cursor("The ferry is booked. ");
+                        u.on_key(Key::b, ctrl);
+                        b.insert_at_cursor("Friday at nine");
+                        u.on_key(Key::b, ctrl);
+                        b.insert_at_cursor(". Sam is coming too.");
+                        u.on_key(Key::D, cs);
+                        u.on_key(Key::H, cs);
+                        b.insert_at_cursor("Numbers for the quarter look better than I feared.");
+                        if std::env::var("JOURNAL_DEBUG_VEIL").is_ok() {
+                            u.on_key(Key::P, cs);
+                        }
+                        if std::env::var("JOURNAL_DEBUG_MENU").is_ok() {
+                            u.on_key(Key::m, ctrl);
+                        }
+                        if std::env::var("JOURNAL_DEBUG_TOP").is_ok() {
+                            let u2 = u.clone();
+                            glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                                u2.scroller.vadjustment().set_value(0.0)
+                            });
+                        }
+                        return;
+                    }
                     b.insert_at_cursor("plain ");
                     u.on_key(Key::b, ctrl);
                     b.insert_at_cursor("bold");
@@ -866,7 +890,7 @@ impl Ui {
         self.flush_draft();
         let mut st = self.st.borrow_mut();
         let Some(d) = st.draft.as_mut() else { return };
-        let empty = d.entry.text.trim().is_empty() && d.entry.media.is_empty();
+        let empty = ipc::plain(&d.entry.text).trim().is_empty() && d.entry.media.is_empty();
         if empty {
             if d.saved {
                 vault.delete_entry(&d.entry.id);
@@ -1624,13 +1648,7 @@ impl Ui {
     }
 
     fn toggle_private(self: &Rc<Self>) {
-        {
-            let mut st = self.st.borrow_mut();
-            let Some(d) = st.draft.as_mut() else { return };
-            d.entry.private = !d.entry.private;
-            d.time.set_text(&stamp(&d.entry));
-        }
-        self.save_draft();
+        self.with_fmt(|f| f.toggle_private_section());
     }
 
     fn sync_in_background(&self) {

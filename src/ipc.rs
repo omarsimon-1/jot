@@ -36,7 +36,7 @@ pub fn plain(text: &str) -> String {
         if n > 0 {
             out.push('\n');
         }
-        let line = if line == "***" { "" } else { line };
+        let line = if line == "***" || line == crate::markdown::PRIVATE_MD { "" } else { line };
         let line = ["## ", "# ", "> "].iter().find_map(|p| line.strip_prefix(p)).unwrap_or(line);
         let mut chars = line.chars();
         while let Some(c) = chars.next() {
@@ -72,6 +72,31 @@ pub fn snippet(text: &str, query_lower: &str) -> Option<String> {
         s.push('…');
     }
     Some(s)
+}
+
+/// An entry's text with its private sections removed. Sections are separated by
+/// divider lines; `None` means every section was private, so the entry is withheld.
+pub fn public_text(text: &str) -> Option<String> {
+    if !text.lines().any(|l| l == crate::markdown::PRIVATE_MD) {
+        return Some(text.to_string());
+    }
+    let mut kept: Vec<String> = Vec::new();
+    let mut section: Vec<&str> = Vec::new();
+    let mut private = false;
+    for line in text.split('\n').chain(std::iter::once("***")) {
+        if line == "***" {
+            if !private {
+                kept.push(section.join("\n"));
+            }
+            section.clear();
+            private = false;
+        } else if line == crate::markdown::PRIVATE_MD {
+            private = true;
+        } else {
+            section.push(line);
+        }
+    }
+    (!kept.is_empty()).then(|| kept.join("\n***\n"))
 }
 
 /// Newest first. Matches entry text and the date itself (so "2026-11" finds a month).
@@ -111,6 +136,14 @@ fn handle(shared: &SharedRef, req: &Value, note: &Sender<String>) -> Result<Valu
         (s.vault.clone(), s.entries.clone())
     };
     entries.retain(|e| !e.private);
+    let mut entries: Vec<Entry> = entries
+        .into_iter()
+        .filter_map(|mut e| {
+            e.text = public_text(&e.text)?;
+            Some(e)
+        })
+        .collect();
+    entries.sort_by_key(|e| e.created);
     if cmd == "status" {
         return Ok(json!({"unlocked": vault.is_some(), "entries": entries.len()}));
     }
@@ -511,4 +544,21 @@ fn summarize(args: &[String]) -> Result<()> {
     };
     println!("{reply}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_sections_are_withheld() {
+        assert_eq!(public_text("all open").as_deref(), Some("all open"));
+        assert_eq!(public_text("<!--private-->\nsecret"), None);
+        assert_eq!(
+            public_text("life\n***\n<!--private-->\nsecret plan\n***\nwork").as_deref(),
+            Some("life\n***\nwork")
+        );
+        assert_eq!(public_text("<!--private-->\nsecret\n***\nwork").as_deref(), Some("work"));
+        assert!(!plain("<!--private-->\nx").contains("private"));
+    }
 }

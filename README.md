@@ -125,7 +125,7 @@ font. Nothing needs compiling. It needs `gtk4` and GStreamer, which Omarchy
 already has.
 
 ```bash
-gh release download -R omarsimon-1/jot -p '*.tar.gz' -O - | tar -xz && jot-linux-x86_64/install.sh
+curl -fsSL https://github.com/omarsimon-1/jot/releases/latest/download/jot-linux-x86_64.tar.gz | tar -xz && jot-linux-x86_64/install.sh
 ```
 
 Then open Jot from the app launcher. The first launch asks you to choose a

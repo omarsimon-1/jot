@@ -70,13 +70,24 @@ pub struct Vault {
 }
 
 pub fn default_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("JOT_DIR") {
+    if let Some(d) = std::env::var_os("VERSO_DIR") {
         return PathBuf::from(d);
     }
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
-    base.join("jot")
+    let dir = base.join("verso");
+    adopt(&base.join("jot"), &dir, |old| {
+        fs::read_to_string(old.join("vault.json")).is_ok_and(|m| m.contains("wrapped_key"))
+    });
+    dir
+}
+
+/// Moves a folder left by an earlier name of this app, when `ours` recognises it.
+pub fn adopt(old: &Path, new: &Path, ours: impl Fn(&Path) -> bool) {
+    if !new.exists() && old.is_dir() && ours(old) {
+        let _ = fs::rename(old, new);
+    }
 }
 
 pub fn media_kind(path: &Path) -> Option<bool> {
@@ -411,7 +422,7 @@ pub fn sync_with(dir: &Path, host: &str) -> Result<String> {
     if host.is_empty() || host.starts_with('-') || host.chars().any(|c| c.is_whitespace() || c == '\'' || c == '"') {
         bail!("that does not look like a host name");
     }
-    const REMOTE: &str = ".local/share/jot";
+    const REMOTE: &str = ".local/share/verso";
     const SSH: &str = "ssh -o BatchMode=yes -o ConnectTimeout=6";
     let ssh = |script: &str| {
         let mut c = std::process::Command::new("ssh");
@@ -424,7 +435,7 @@ pub fn sync_with(dir: &Path, host: &str) -> Result<String> {
     match (&local_id, &remote_id) {
         (None, None) => bail!("there is no journal on either machine yet"),
         (Some(l), Some(r)) if l.is_empty() || r.is_empty() => {
-            bail!("open Jot once on both machines after updating, then sync again")
+            bail!("open Verso once on both machines after updating, then sync again")
         }
         (Some(l), Some(r)) if l != r => {
             bail!("{host} holds a different journal that was created separately; not mixing them")
@@ -541,7 +552,7 @@ mod tests {
         fs::remove_dir_all(&d).unwrap();
     }
 
-    /// Builds a throwaway demo vault at $JOT_DIR (password "demo") for visual checks.
+    /// Builds a throwaway demo vault at $VERSO_DIR (password "demo") for visual checks.
     #[test]
     #[ignore]
     fn seed_demo() {
@@ -550,7 +561,7 @@ mod tests {
         let d = default_dir();
         let _ = fs::remove_dir_all(&d);
         let v = Vault::create(&d, "demo").unwrap();
-        let photo = match std::env::var_os("JOT_DEMO_PHOTO") {
+        let photo = match std::env::var_os("VERSO_DEMO_PHOTO") {
             Some(p) => v.import_media(Path::new(&p)).unwrap(),
             None => {
                 let pb = Pixbuf::new(Colorspace::Rgb, false, 8, 900, 500).unwrap();

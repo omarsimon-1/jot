@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Jot
+Name=Verso
 GenericName=Private Journal
 Comment=A private daily journal: just a cursor and text. Encrypted on disk, exportable to markdown.
-Exec=jot
-Icon=app.jot.Jot
+Exec=verso
+Icon=app.verso.Verso
 Terminal=false
 Categories=Office;Utility;TextEditor;
-Keywords=jot;journal;diary;writing;notes;markdown;
-StartupWMClass=app.jot.Jot
+Keywords=verso;journal;diary;writing;notes;markdown;
+StartupWMClass=app.verso.Verso

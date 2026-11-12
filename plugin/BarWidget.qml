@@ -3,16 +3,16 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 
-// One button in the bar: opens Jot, or focuses it when it is already open.
+// One button in the bar: opens Verso, or focuses it when it is already open.
 BarWidget {
   id: root
-  moduleName: "omarsimon.jot"
+  moduleName: "omarsimon.verso"
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
   function open() {
-    Quickshell.execDetached(["omarchy-launch-or-focus", "app.jot.Jot", "uwsm-app -- jot"])
+    Quickshell.execDetached(["omarchy-launch-or-focus", "app.verso.Verso", "uwsm-app -- verso"])
   }
 
   BarIconButton {
@@ -22,7 +22,7 @@ BarWidget {
     text: ""
     slotSize: Style.bar.statusSlot
     fontSize: Style.font.caption
-    tooltipText: "Jot"
+    tooltipText: "Verso"
     onPressed: root.open()
   }
 }

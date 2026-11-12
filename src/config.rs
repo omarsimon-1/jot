@@ -6,7 +6,11 @@ pub fn file(name: &str) -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"));
-    base.join("jot").join(name)
+    let dir = base.join("verso");
+    crate::vault::adopt(&base.join("jot"), &dir, |old| {
+        ["font-size", "veil-chars", "sync-host", "backup-dir"].iter().any(|f| old.join(f).is_file())
+    });
+    dir.join(name)
 }
 
 pub fn get(name: &str) -> Option<String> {

@@ -1,9 +1,9 @@
 [package]
-name = "jot"
-version = "0.6.0"
+name = "verso"
+version = "0.7.0"
 description = "A private daily journal for Omarchy: just a cursor and text."
 license = "MIT"
-repository = "https://github.com/omarsimon-1/jot"
+repository = "https://github.com/omarsimon-1/verso"
 edition = "2024"
 
 [dependencies]

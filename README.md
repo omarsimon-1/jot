@@ -7,16 +7,16 @@
 
 A private daily journal for Omarchy. Just a cursor and text.
 
-Jot opens to today, timestamps what you write, and keeps everything
+Verso opens to today, timestamps what you write, and keeps everything
 encrypted on your own disk. There are no toolbars, no sidebars and no
 accounts. Every feature is a keystroke away and invisible until you ask for it.
 
-![A day in Jot: entries, a photo and a clip](assets/screenshots/day.png)
+![A day in Verso: entries, a photo and a clip](assets/screenshots/day.png)
 
 ## Why it exists
 
 Most journaling apps are either a web page pretending to be an app, or a
-note-taking system with a journal bolted on. Jot does one thing: it gets
+note-taking system with a journal bolted on. Verso does one thing: it gets
 out of the way so you write. It is a native Rust and GTK4 app, opens instantly,
 and works fully offline.
 
@@ -91,12 +91,12 @@ place when you click them.
 
 ## Your data stays yours
 
-- **Markdown export.** Ctrl+Shift+E, or `jot export <folder>`, writes one
+- **Markdown export.** Ctrl+Shift+E, or `verso export <folder>`, writes one
   plain `YYYY-MM-DD.md` file per day plus a `media` folder. Open the result
   directly in Obsidian or anything else.
-- **Encrypted backup.** `jot backup <folder>` copies the vault as it is,
+- **Encrypted backup.** `verso backup <folder>` copies the vault as it is,
   still encrypted, and repeats automatically every time the journal locks.
-- **Sync between your machines.** `jot sync <host>` does a two-way sync
+- **Sync between your machines.** `verso sync <host>` does a two-way sync
   with another machine over SSH, for example one on your tailnet. Only
   encrypted files travel and nothing is ever deleted. After the first run it
   syncs on every unlock and lock. Two journals that were created separately are
@@ -104,17 +104,17 @@ place when you click them.
 
 ## Agents
 
-Jot can be read by an AI agent, on your terms. Access is read-only, works
+Verso can be read by an AI agent, on your terms. Access is read-only, works
 only while the app is unlocked, and never includes private sections.
 
-- **Ask and summarize.** `jot summarize` writes up your week or month, and
-  `jot ask <question>` answers anything about your recent entries. Both use
+- **Ask and summarize.** `verso summarize` writes up your week or month, and
+  `verso ask <question>` answers anything about your recent entries. Both use
   the agent you chose with `omarchy default agent`. Add `--ollama` to keep it on
   your machine with a local model. With a cloud agent, the entries in that
   period are sent to it, and the command says so each time.
-- **MCP server.** `jot mcp` exposes search and read tools to any MCP
-  client. For Claude Code: `claude mcp add jot -- jot mcp`.
-- **Plain commands.** `jot search`, `jot read` and `jot days` work
+- **MCP server.** `verso mcp` exposes search and read tools to any MCP
+  client. For Claude Code: `claude mcp add verso -- verso mcp`.
+- **Plain commands.** `verso search`, `verso read` and `verso days` work
   from any shell or script.
 
 ## Install
@@ -125,19 +125,19 @@ font. Nothing needs compiling. It needs `gtk4` and GStreamer, which Omarchy
 already has.
 
 ```bash
-curl -fsSL https://github.com/omarsimon-1/jot/releases/latest/download/jot-linux-x86_64.tar.gz | tar -xz && jot-linux-x86_64/install.sh
+curl -fsSL https://github.com/omarsimon-1/verso/releases/latest/download/verso-linux-x86_64.tar.gz | tar -xz && verso-linux-x86_64/install.sh
 ```
 
-Then open Jot from the app launcher. The first launch asks you to choose a
+Then open Verso from the app launcher. The first launch asks you to choose a
 password.
 
 ### Bar button
 
 This repository is also an Omarchy shell plugin that adds a bar button to open
-Jot. The plugin is only the button; the app comes from the installer.
+Verso. The plugin is only the button; the app comes from the installer.
 
 ```bash
-omarchy plugin add https://github.com/omarsimon-1/jot.git --enable
+omarchy plugin add https://github.com/omarsimon-1/verso.git --enable
 ```
 
 ### Keybinding
@@ -145,7 +145,7 @@ omarchy plugin add https://github.com/omarsimon-1/jot.git --enable
 Add to `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + SHIFT + J", "Jot", "omarchy-launch-or-focus app.jot.Jot 'uwsm-app -- jot'")
+o.bind("SUPER + SHIFT + J", "Verso", "omarchy-launch-or-focus app.verso.Verso 'uwsm-app -- verso'")
 ```
 
 ## Uninstall
@@ -153,22 +153,22 @@ o.bind("SUPER + SHIFT + J", "Jot", "omarchy-launch-or-focus app.jot.Jot 'uwsm-ap
 Remove the app, its launcher entry and its icon:
 
 ```bash
-rm -f ~/.local/bin/jot ~/.local/share/applications/app.jot.Jot.desktop ~/.local/share/icons/hicolor/scalable/apps/app.jot.Jot.svg
+rm -f ~/.local/bin/verso ~/.local/share/applications/app.verso.Verso.desktop ~/.local/share/icons/hicolor/scalable/apps/app.verso.Verso.svg
 ```
 
 Remove the bar button, if you added it:
 
 ```bash
-omarchy plugin remove omarsimon.jot
+omarchy plugin remove omarsimon.verso
 ```
 
-Your journal is not touched by either step. It stays in `~/.local/share/jot`,
-with settings in `~/.config/jot`. Delete those folders only if you want to
+Your journal is not touched by either step. It stays in `~/.local/share/verso`,
+with settings in `~/.config/verso`. Delete those folders only if you want to
 erase your entries for good; export them first if you might want them later.
 The installer also adds the Gelasio font to `~/.local/share/fonts/gelasio`,
 which other apps may use.
 
-Jot changes no Omarchy or Hyprland configuration. The keybinding above is
+Verso changes no Omarchy or Hyprland configuration. The keybinding above is
 something you add yourself.
 
 ## Shortcuts
@@ -202,7 +202,7 @@ Press Ctrl+/ or F1 in the app for this list.
 
 ## Command line
 
-Run `jot help` for the full list. Search, read, export, summarize and ask
+Run `verso help` for the full list. Search, read, export, summarize and ask
 need the app running and unlocked. Sync and backup move only encrypted files
 and work whether or not the app is open.
 
@@ -210,9 +210,9 @@ and work whether or not the app is open.
 
 | What | Where |
 |---|---|
-| Encrypted vault | `~/.local/share/jot` (override with `JOT_DIR`) |
-| Settings (text size, sync host, backup folder) | `~/.config/jot` |
-| Agent socket | `$XDG_RUNTIME_DIR/jot.sock`, readable only by you |
+| Encrypted vault | `~/.local/share/verso` (override with `VERSO_DIR`) |
+| Settings (text size, sync host, backup folder) | `~/.config/verso` |
+| Agent socket | `$XDG_RUNTIME_DIR/verso.sock`, readable only by you |
 
 ## Build from source
 

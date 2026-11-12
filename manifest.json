@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "id": "omarsimon.jot",
-  "name": "Jot",
-  "version": "0.6.0",
+  "id": "omarsimon.verso",
+  "name": "Verso",
+  "version": "0.7.0",
   "author": "omarsimon-1",
-  "homepage": "https://github.com/omarsimon-1/jot",
+  "homepage": "https://github.com/omarsimon-1/verso",
   "description": "A private daily journal: just a cursor and text. Encrypted on disk, exportable to markdown, with photos, videos, search and a calendar of the days you wrote. This plugin is the bar button; install the app itself with install.sh from the latest release.",
   "kinds": [
     "bar-widget"
@@ -14,11 +14,11 @@
     "barWidget": "plugin/BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Jot",
-    "description": "Opens Jot, or brings it to the front if it is already open.",
+    "displayName": "Verso",
+    "description": "Opens Verso, or brings it to the front if it is already open.",
     "category": "Productivity",
     "aliases": [
-      "jot",
+      "verso",
       "journal",
       "diary",
       "writing",

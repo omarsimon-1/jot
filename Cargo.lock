@@ -628,20 +628,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
-name = "jot"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "argon2",
- "chacha20poly1305",
- "chrono",
- "gtk4",
- "serde",
- "serde_json",
- "zeroize",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1009,6 +995,20 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "verso"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "chacha20poly1305",
+ "chrono",
+ "gtk4",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
 
 [[package]]
 name = "wasi"

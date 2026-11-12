@@ -24,9 +24,9 @@ pub type SharedRef = Arc<Mutex<Shared>>;
 pub fn socket_path() -> PathBuf {
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("jot-{}", std::env::var("USER").unwrap_or_default())));
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("verso-{}", std::env::var("USER").unwrap_or_default())));
     let _ = crate::vault::private_dir(&base);
-    base.join(std::env::var("JOT_SOCKET").unwrap_or_else(|_| "jot.sock".into()))
+    base.join(std::env::var("VERSO_SOCKET").unwrap_or_else(|_| "verso.sock".into()))
 }
 
 /// Entry text with the markdown markers removed, for matching and snippets.
@@ -219,7 +219,7 @@ pub fn serve(shared: SharedRef, note: Sender<String>) -> Result<()> {
 
 pub fn request(req: &Value) -> Result<Value> {
     let mut stream = UnixStream::connect(socket_path())
-        .map_err(|_| anyhow!("Jot is not running. Open the app and unlock it first."))?;
+        .map_err(|_| anyhow!("Verso is not running. Open the app and unlock it first."))?;
     writeln!(stream, "{req}")?;
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line)?;
@@ -230,22 +230,22 @@ pub fn request(req: &Value) -> Result<Value> {
     Ok(v)
 }
 
-const USAGE: &str = "jot                      open the app
-jot status               is the journal running and unlocked?
-jot search <words>       find entries (newest first)
-jot read [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--all]
+const USAGE: &str = "verso                    open the app
+verso status             is the journal running and unlocked?
+verso search <words>     find entries (newest first)
+verso read [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--all]
                          print entries as markdown (default: today)
-jot days                 list days that have entries
-jot export <folder>      write plain markdown and media to a folder
-jot summarize [--week|--month|--all|--since YYYY-MM-DD]
+verso days               list days that have entries
+verso export <folder>    write plain markdown and media to a folder
+verso summarize [--week|--month|--all|--since YYYY-MM-DD]
                          a summary written by your Omarchy default agent
-jot ask <question>       ask your agent anything about the last 30 days
+verso ask <question>     ask your agent anything about the last 30 days
                          (same period flags; --agent NAME picks another
                          agent, --ollama uses a local model instead)
-jot mcp                  run as an MCP server for agents (stdio)
-jot sync [HOST|--off]    two-way sync with another machine over SSH/tailnet;
+verso mcp                run as an MCP server for agents (stdio)
+verso sync [HOST|--off]  two-way sync with another machine over SSH/tailnet;
                          the host is remembered and synced on unlock and lock
-jot backup [FOLDER|--off]
+verso backup [FOLDER|--off]
                          copy the encrypted vault to a folder; remembered
                          and repeated every time the journal locks
 
@@ -285,7 +285,7 @@ pub fn cli(args: &[String]) -> Result<()> {
             }
         }
         "export" => {
-            let dir = args.get(1).ok_or_else(|| anyhow!("usage: jot export <folder>"))?;
+            let dir = args.get(1).ok_or_else(|| anyhow!("usage: verso export <folder>"))?;
             let abs = std::path::absolute(dir)?;
             let v = request(&json!({"cmd": "export", "dir": abs}))?;
             println!("Exported {} day(s) to {}", v["days"], abs.display());
@@ -303,7 +303,7 @@ pub fn cli(args: &[String]) -> Result<()> {
                     let host = arg
                         .map(str::to_string)
                         .or_else(|| crate::config::get("sync-host"))
-                        .ok_or_else(|| anyhow!("usage: jot sync <host>"))?;
+                        .ok_or_else(|| anyhow!("usage: verso sync <host>"))?;
                     println!("{}", crate::vault::sync_with(&dir, &host)?);
                     crate::config::set("sync-host", Some(&host));
                 }
@@ -320,7 +320,7 @@ pub fn cli(args: &[String]) -> Result<()> {
                     let dest = match arg {
                         Some(a) => std::path::absolute(a)?.display().to_string(),
                         None => crate::config::get("backup-dir")
-                            .ok_or_else(|| anyhow!("usage: jot backup <folder>"))?,
+                            .ok_or_else(|| anyhow!("usage: verso backup <folder>"))?,
                     };
                     let n = crate::vault::backup(&dir, std::path::Path::new(&dest))?;
                     println!("Backed up {n} file(s) to {dest}");
@@ -402,7 +402,7 @@ fn mcp() -> Result<()> {
             "initialize" => Ok(json!({
                 "protocolVersion": params.get("protocolVersion").cloned().unwrap_or(json!("2024-11-05")),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "jot", "version": env!("CARGO_PKG_VERSION")}
+                "serverInfo": {"name": "verso", "version": env!("CARGO_PKG_VERSION")}
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": mcp_tools()})),
@@ -424,7 +424,7 @@ fn mcp() -> Result<()> {
 
 fn ollama(method: &str, path: &str, body: &str) -> Result<Value> {
     use std::io::Read;
-    let addr = std::env::var("JOT_OLLAMA").unwrap_or_else(|_| "127.0.0.1:11434".into());
+    let addr = std::env::var("VERSO_OLLAMA").unwrap_or_else(|_| "127.0.0.1:11434".into());
     let mut stream = std::net::TcpStream::connect(&addr)
         .map_err(|_| anyhow!("No local model server found at {addr}. Install Ollama and pull a model first."))?;
     write!(
@@ -458,7 +458,7 @@ fn run_agent(agent: &str, prompt: &str) -> Result<String> {
         "codex" => (&["exec", "-"], true),
         "gemini" | "copilot" | "cursor-agent" | "pi" | "omp" | "grok" => (&["-p"], false),
         "opencode" | "crush" => (&["run"], false),
-        other => bail!("Jot does not know how to ask {other} a one-off question. Try --agent claude or --ollama."),
+        other => bail!("Verso does not know how to ask {other} a one-off question. Try --agent claude or --ollama."),
     };
     let mut cmd = Command::new(agent);
     cmd.args(args).current_dir(std::env::temp_dir()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -482,7 +482,7 @@ fn run_agent(agent: &str, prompt: &str) -> Result<String> {
 }
 
 fn run_ollama(model: Option<String>, prompt: &str) -> Result<String> {
-    let model = match model.or_else(|| std::env::var("JOT_MODEL").ok()) {
+    let model = match model.or_else(|| std::env::var("VERSO_MODEL").ok()) {
         Some(m) => m,
         None => ollama("GET", "/api/tags", "")?["models"][0]["name"]
             .as_str()
@@ -522,7 +522,7 @@ fn summarize(args: &[String]) -> Result<()> {
     }
     let task = if args[0] == "ask" {
         if question.is_empty() {
-            bail!("usage: jot ask <question>");
+            bail!("usage: verso ask <question>");
         }
         format!("Answer this question using only my journal entries below, addressing me as \"you\": {}", question.join(" "))
     } else {

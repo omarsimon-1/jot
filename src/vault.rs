@@ -545,30 +545,56 @@ mod tests {
     #[test]
     #[ignore]
     fn seed_demo() {
+        use chrono::Datelike;
         use gtk::gdk_pixbuf::{Colorspace, Pixbuf};
         let d = default_dir();
         let _ = fs::remove_dir_all(&d);
         let v = Vault::create(&d, "demo").unwrap();
-        let pb = Pixbuf::new(Colorspace::Rgb, false, 8, 900, 500).unwrap();
-        pb.fill(0x8c8c8cff);
-        let png = pb.save_to_bufferv("png", &[]).unwrap();
-        let photo = v.import_png(&png).unwrap();
-        fs::write(d.join("clip.mp4"), b"not a real video").unwrap();
-        let clip = v.import_media(&d.join("clip.mp4")).unwrap();
-        let now = Local::now();
-        let mk = |id: &str, ago_min: i64, text: &str, media: Vec<Media>| Entry {
-            id: id.into(),
-            created: now - chrono::Duration::minutes(ago_min),
-            text: text.into(),
-            media,
-            private: false,
+        let photo = match std::env::var_os("JOT_DEMO_PHOTO") {
+            Some(p) => v.import_media(Path::new(&p)).unwrap(),
+            None => {
+                let pb = Pixbuf::new(Colorspace::Rgb, false, 8, 900, 500).unwrap();
+                pb.fill(0x8c8c8cff);
+                v.import_png(&pb.save_to_bufferv("png", &[]).unwrap()).unwrap()
+            }
         };
-        let entries = [
-            mk("a", 60 * 26, "Yesterday's note about the **harbour** walk.", vec![]),
-            mk("b", 95, "# Morning\nCoffee on the porch. The light was *unreasonably* good, and I finally fixed the ~~gate~~ fence.\n> Write it down before it goes.\n- call Sam\n- book the `ferry`", vec![photo]),
-            mk("d", 525_600, "A year ago today: first frost, and the long drive north.", vec![]),
-            mk("c", 20, "Second entry of the day, with a clip.", vec![clip]),
+        fs::write(d.join("boats.mp4"), b"not a real video").unwrap();
+        let clip = v.import_media(&d.join("boats.mp4")).unwrap();
+        let today = Local::now().date_naive();
+        let at = |date: NaiveDate, h: u32, m: u32| date.and_hms_opt(h, m, 0).unwrap().and_local_timezone(Local).unwrap();
+        let mut entries = Vec::new();
+        let mut add = |date: NaiveDate, h: u32, m: u32, text: &str, media: Vec<Media>| {
+            entries.push(Entry { id: format!("e{}", entries.len()), created: at(date, h, m), text: text.into(), media, private: false });
+        };
+        let past = [
+            (1, "Long walk along the harbour wall after dinner. Decided to take the ferry out on Friday."),
+            (2, "Slow day. Read for an hour in the afternoon and did not feel guilty about it."),
+            (3, "Finished the draft and sent it before I could talk myself out of it."),
+            (4, "Rain all morning. Cleared the desk, cleared my head a little too."),
+            (5, "Dinner with Sam. We talked about the move for the first time in months."),
+            (6, "Up early. The house is quiet at six in a way it never is at nine."),
+            (8, "A hard conversation that went better than the one I rehearsed."),
+            (9, "Planted the last of the bulbs. Nothing to show for it until spring."),
+            (10, "Wrote three pages and kept one. That one is good."),
+            (12, "First properly cold morning. Found the heavy coat."),
+            (13, "Called home. Everyone is fine, which is the whole of the news."),
         ];
+        for (ago, text) in past {
+            if let Some(date) = today.checked_sub_days(chrono::Days::new(ago)) {
+                add(date, 21, 10 + ago as u32, text, vec![]);
+            }
+        }
+        if let Some(last_year) = today.with_year(today.year() - 1) {
+            add(last_year, 20, 5, "First frost, and the long drive north.", vec![]);
+        }
+        add(
+            today,
+            7,
+            40,
+            "# Morning\nCoffee on the porch before anyone was up. The light on the water was *unreasonably* good, and I finally fixed the ~~gate~~ fence.\n> Write it down before it goes.\n- call Sam\n- book the `ferry`",
+            vec![photo],
+        );
+        add(today, 13, 15, "Walked down to the harbour at lunch and took a short clip of the boats coming in.", vec![clip]);
         for e in &entries {
             v.save_entry(e).unwrap();
         }

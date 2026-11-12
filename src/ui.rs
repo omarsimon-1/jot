@@ -476,6 +476,10 @@ impl Ui {
                         if std::env::var("JOT_DEBUG_MENU").is_ok() {
                             u.on_key(Key::m, ctrl);
                         }
+                        if std::env::var("JOT_DEBUG_SEARCH").is_ok() {
+                            u.open_search();
+                            u.search_entry.set_text("harbour");
+                        }
                         if std::env::var("JOT_DEBUG_TOP").is_ok() {
                             let u2 = u.clone();
                             glib::timeout_add_local_once(Duration::from_millis(900), move || {

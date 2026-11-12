@@ -11,7 +11,7 @@ Jot opens to today, timestamps what you write, and keeps everything
 encrypted on your own disk. There are no toolbars, no sidebars and no
 accounts. Every feature is a keystroke away and invisible until you ask for it.
 
-![Writing an entry](assets/screenshots/writing.png)
+![A day in Jot: entries, a photo and a clip](assets/screenshots/day.png)
 
 ## Why it exists
 
@@ -42,7 +42,7 @@ and works fully offline.
 - **Light and dark.** Follows your system setting; Ctrl+D flips it. Entirely
   monochrome either way.
 
-![A day with a photo, a clip and an earlier year](assets/screenshots/day.png)
+![Writing, with a divider and a private section](assets/screenshots/writing.png)
 
 ## Photos and videos
 
@@ -66,6 +66,8 @@ place when you click them.
 - **Day to day.** Alt+Left and Alt+Right step through the days you wrote.
 
 ![Calendar, streaks and totals](assets/screenshots/calendar.png)
+
+![Search across every entry](assets/screenshots/search.png)
 
 ## Privacy
 

@@ -23,14 +23,6 @@ install -Dm644 -t "$data/fonts/gelasio" "$fonts"/*.ttf
 install -Dm644 "$assets/app.jot.Jot.svg" "$data/icons/hicolor/scalable/apps/app.jot.Jot.svg"
 install -Dm644 "$assets/app.jot.Jot.desktop" "$data/applications/app.jot.Jot.desktop"
 
-# Jot was called Journal before 0.6. Remove that version's app, icon and
-# launcher entry. Your entries are untouched: Jot moves them over when it opens.
-for old in "$HOME/.local/bin/journal" \
-  "$data/applications/app.journal.Journal.desktop" \
-  "$data/icons/hicolor/scalable/apps/app.journal.Journal.svg"; do
-  [[ -f "$old" ]] && rm -f -- "$old"
-done
-
 fc-cache -f "$data/fonts" 2>/dev/null || true
 gtk-update-icon-cache -q -t "$data/icons/hicolor" 2>/dev/null || true
 update-desktop-database -q "$data/applications" 2>/dev/null || true

@@ -189,12 +189,6 @@ and work whether or not the app is open.
 | Settings (text size, sync host, backup folder) | `~/.config/jot` |
 | Agent socket | `$XDG_RUNTIME_DIR/jot.sock`, readable only by you |
 
-## Upgrading from Journal
-
-Jot was called Journal before 0.6. Run the installer and open Jot: it moves
-your existing entries and settings to the new location by itself, and the
-installer removes the old app. The command is now `jot`.
-
 ## Build from source
 
 ```bash

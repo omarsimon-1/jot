@@ -76,17 +76,7 @@ pub fn default_dir() -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
-    migrate(&base, "jot")
-}
-
-/// The app used to be called Journal. If its folder is still there and the new
-/// one is not, move it across once so nothing has to be done by hand.
-pub fn migrate(base: &Path, name: &str) -> PathBuf {
-    let (new, old) = (base.join(name), base.join("journal"));
-    if !new.exists() && old.is_dir() {
-        let _ = fs::rename(&old, &new);
-    }
-    new
+    base.join("jot")
 }
 
 pub fn media_kind(path: &Path) -> Option<bool> {

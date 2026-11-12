@@ -148,6 +148,29 @@ Add to `~/.config/hypr/bindings.lua`:
 o.bind("SUPER + SHIFT + J", "Jot", "omarchy-launch-or-focus app.jot.Jot 'uwsm-app -- jot'")
 ```
 
+## Uninstall
+
+Remove the app, its launcher entry and its icon:
+
+```bash
+rm -f ~/.local/bin/jot ~/.local/share/applications/app.jot.Jot.desktop ~/.local/share/icons/hicolor/scalable/apps/app.jot.Jot.svg
+```
+
+Remove the bar button, if you added it:
+
+```bash
+omarchy plugin remove omarsimon.jot
+```
+
+Your journal is not touched by either step. It stays in `~/.local/share/jot`,
+with settings in `~/.config/jot`. Delete those folders only if you want to
+erase your entries for good; export them first if you might want them later.
+The installer also adds the Gelasio font to `~/.local/share/fonts/gelasio`,
+which other apps may use.
+
+Jot changes no Omarchy or Hyprland configuration. The keybinding above is
+something you add yourself.
+
 ## Shortcuts
 
 Press Ctrl+/ or F1 in the app for this list.

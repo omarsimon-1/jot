@@ -70,13 +70,23 @@ pub struct Vault {
 }
 
 pub fn default_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("JOURNAL_DIR") {
+    if let Some(d) = std::env::var_os("JOT_DIR") {
         return PathBuf::from(d);
     }
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
-    base.join("journal")
+    migrate(&base, "jot")
+}
+
+/// The app used to be called Journal. If its folder is still there and the new
+/// one is not, move it across once so nothing has to be done by hand.
+pub fn migrate(base: &Path, name: &str) -> PathBuf {
+    let (new, old) = (base.join(name), base.join("journal"));
+    if !new.exists() && old.is_dir() {
+        let _ = fs::rename(&old, &new);
+    }
+    new
 }
 
 pub fn media_kind(path: &Path) -> Option<bool> {
@@ -411,7 +421,7 @@ pub fn sync_with(dir: &Path, host: &str) -> Result<String> {
     if host.is_empty() || host.starts_with('-') || host.chars().any(|c| c.is_whitespace() || c == '\'' || c == '"') {
         bail!("that does not look like a host name");
     }
-    const REMOTE: &str = ".local/share/journal";
+    const REMOTE: &str = ".local/share/jot";
     const SSH: &str = "ssh -o BatchMode=yes -o ConnectTimeout=6";
     let ssh = |script: &str| {
         let mut c = std::process::Command::new("ssh");
@@ -424,7 +434,7 @@ pub fn sync_with(dir: &Path, host: &str) -> Result<String> {
     match (&local_id, &remote_id) {
         (None, None) => bail!("there is no journal on either machine yet"),
         (Some(l), Some(r)) if l.is_empty() || r.is_empty() => {
-            bail!("open Journal once on both machines after updating, then sync again")
+            bail!("open Jot once on both machines after updating, then sync again")
         }
         (Some(l), Some(r)) if l != r => {
             bail!("{host} holds a different journal that was created separately; not mixing them")
@@ -541,7 +551,7 @@ mod tests {
         fs::remove_dir_all(&d).unwrap();
     }
 
-    /// Builds a throwaway demo vault at $JOURNAL_DIR (password "demo") for visual checks.
+    /// Builds a throwaway demo vault at $JOT_DIR (password "demo") for visual checks.
     #[test]
     #[ignore]
     fn seed_demo() {

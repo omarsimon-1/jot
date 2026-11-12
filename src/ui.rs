@@ -13,7 +13,7 @@ use crate::ipc::{self, Shared, SharedRef};
 use crate::markdown::{self, Fmt};
 use crate::vault::{self, Entry, Media, Vault};
 
-const APP_ID: &str = "app.journal.Journal";
+const APP_ID: &str = "app.jot.Jot";
 const DEFAULT_FONT: i32 = 14;
 
 const HELP: &str = "Ctrl Enter\tfinish this entry, start the next
@@ -100,7 +100,7 @@ fn today() -> NaiveDate {
 }
 
 fn tmp_dir() -> PathBuf {
-    ipc::socket_path().with_file_name("journal-media")
+    ipc::socket_path().with_file_name("jot-media")
 }
 
 fn label(text: &str, class: &str) -> gtk::Label {
@@ -150,10 +150,7 @@ fn system_prefers_dark() -> (bool, Option<gio::Settings>) {
 }
 
 fn font_file() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"));
-    base.join("journal").join("font-size")
+    crate::config::file("font-size")
 }
 
 fn load_font() -> i32 {
@@ -261,7 +258,7 @@ impl Ui {
     fn build(app: &gtk::Application, shared: SharedRef, rx: Receiver<String>, notes: Sender<String>) {
         let window = gtk::ApplicationWindow::builder()
             .application(app)
-            .title("Journal")
+            .title("Jot")
             .default_width(900)
             .default_height(960)
             .build();
@@ -446,14 +443,14 @@ impl Ui {
         ui.window.present();
         // Debug builds only: lets automated checks open a throwaway vault.
         #[cfg(debug_assertions)]
-        if let Ok(p) = std::env::var("JOURNAL_DEBUG_PASSWORD") {
+        if let Ok(p) = std::env::var("JOT_DEBUG_PASSWORD") {
             ui.pw.set_text(&p);
             ui.pw2.set_text(&p);
             ui.unlock();
         }
         #[cfg(debug_assertions)]
-        if let Ok(path) = std::env::var("JOURNAL_DEBUG_SHOT") {
-            if let Ok(v) = std::env::var("JOURNAL_DEBUG_DARK") {
+        if let Ok(path) = std::env::var("JOT_DEBUG_SHOT") {
+            if let Ok(v) = std::env::var("JOT_DEBUG_DARK") {
                 ui.st.borrow_mut().dark = v == "1";
                 ui.apply_theme();
             }
@@ -464,7 +461,7 @@ impl Ui {
                     use gdk::Key;
                     let ctrl = gdk::ModifierType::CONTROL_MASK;
                     let cs = ctrl | gdk::ModifierType::SHIFT_MASK;
-                    if std::env::var("JOURNAL_DEBUG_CLEAN").is_ok() {
+                    if std::env::var("JOT_DEBUG_CLEAN").is_ok() {
                         b.insert_at_cursor("The ferry is booked. ");
                         u.on_key(Key::b, ctrl);
                         b.insert_at_cursor("Friday at nine");
@@ -473,13 +470,13 @@ impl Ui {
                         u.on_key(Key::D, cs);
                         u.on_key(Key::H, cs);
                         b.insert_at_cursor("Numbers for the quarter look better than I feared.");
-                        if std::env::var("JOURNAL_DEBUG_VEIL").is_ok() {
+                        if std::env::var("JOT_DEBUG_VEIL").is_ok() {
                             u.on_key(Key::P, cs);
                         }
-                        if std::env::var("JOURNAL_DEBUG_MENU").is_ok() {
+                        if std::env::var("JOT_DEBUG_MENU").is_ok() {
                             u.on_key(Key::m, ctrl);
                         }
-                        if std::env::var("JOURNAL_DEBUG_TOP").is_ok() {
+                        if std::env::var("JOT_DEBUG_TOP").is_ok() {
                             let u2 = u.clone();
                             glib::timeout_add_local_once(Duration::from_millis(900), move || {
                                 u2.scroller.vadjustment().set_value(0.0)
@@ -500,28 +497,28 @@ impl Ui {
                     b.insert_at_cursor("below the divider");
                     eprintln!("markdown: {:?}", markdown::to_markdown(&b));
                     u.on_key(Key::H, cs);
-                    if std::env::var("JOURNAL_DEBUG_VEIL").is_ok() {
+                    if std::env::var("JOT_DEBUG_VEIL").is_ok() {
                         u.on_key(Key::P, cs);
                         u.on_key(Key::bracketleft, ctrl);
                         u.on_key(Key::bracketleft, ctrl);
                     }
-                    if std::env::var("JOURNAL_DEBUG_TOP").is_ok() {
+                    if std::env::var("JOT_DEBUG_TOP").is_ok() {
                         let u2 = u.clone();
                         glib::timeout_add_local_once(Duration::from_millis(900), move || {
                             u2.scroller.vadjustment().set_value(0.0)
                         });
                     }
-                    if std::env::var("JOURNAL_DEBUG_BIG").is_ok() {
+                    if std::env::var("JOT_DEBUG_BIG").is_ok() {
                         u.on_key(Key::equal, ctrl);
                         u.on_key(Key::equal, ctrl);
                         u.on_key(Key::equal, ctrl);
                     }
-                    if std::env::var("JOURNAL_DEBUG_MENU").is_ok() {
+                    if std::env::var("JOT_DEBUG_MENU").is_ok() {
                         u.on_key(Key::m, ctrl);
                         u.on_key(Key::Left, gdk::ModifierType::empty());
                     }
                 }
-                if std::env::var("JOURNAL_DEBUG_SEARCH").is_ok() {
+                if std::env::var("JOT_DEBUG_SEARCH").is_ok() {
                     u.open_search();
                     u.search_entry.set_text("the");
                     let u2 = u.clone();
@@ -1390,7 +1387,7 @@ impl Ui {
     // ---- background: idle lock, sleep lock, agent notices ----------------
 
     fn connect_background(self: &Rc<Self>, rx: Receiver<String>) {
-        let idle = std::env::var("JOURNAL_IDLE_MINUTES").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(5);
+        let idle = std::env::var("JOT_IDLE_MINUTES").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(5);
         let u = self.clone();
         glib::timeout_add_local(Duration::from_millis(400), move || {
             while let Ok(note) = rx.try_recv() {

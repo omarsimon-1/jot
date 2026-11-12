@@ -1,9 +1,9 @@
 [package]
-name = "journal"
-version = "0.5.0"
+name = "jot"
+version = "0.6.0"
 description = "A private daily journal for Omarchy: just a cursor and text."
 license = "MIT"
-repository = "https://github.com/omarsimon-1/journal"
+repository = "https://github.com/omarsimon-1/jot"
 edition = "2024"
 
 [dependencies]

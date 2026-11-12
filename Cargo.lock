@@ -628,8 +628,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
-name = "journal"
-version = "0.5.0"
+name = "jot"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "argon2",
